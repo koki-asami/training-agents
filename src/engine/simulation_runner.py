@@ -277,52 +277,88 @@ class SimulationRunner:
         return responses
 
     async def set_event_interval(self, seconds: float):
-        """Change the interval between events at runtime."""
-        self.clock.event_interval = seconds
-        logger.info("event_interval_changed", seconds=seconds)
+        """Change the time scale (real seconds per sim minute) at runtime."""
+        self.clock.seconds_per_sim_minute = seconds
+        logger.info("time_scale_changed", seconds_per_sim_minute=seconds)
 
     async def _simulation_loop(self):
-        """Event-driven simulation loop.
+        """Scenario-interval-driven simulation loop.
 
-        Advances to the next event's time, processes it, then waits
-        the configured interval before proceeding to the next event.
+        Waits proportional to the time gap between consecutive events
+        in the uploaded scenario. The sim_time is rebased from the
+        scenario's first event time to the training start time.
         """
-        # Get sorted event times
-        event_index = 0
         sorted_events = sorted(self.config.events, key=lambda e: e.scheduled_time)
+        if not sorted_events:
+            return
+
+        # Rebase: compute offset from scenario's first event to training start time
+        # e.g., scenario starts at 13:18, training starts now -> offset applied
+        scenario_base = sorted_events[0].scheduled_time
+        training_base = self.config.sim_start_time  # defaults to scenario's first event
+        self.clock.advance_to(training_base)
+
+        logger.info(
+            "simulation_loop_starting",
+            scenario_time_range=f"{sorted_events[0].scheduled_time}-{sorted_events[-1].scheduled_time}",
+            training_start=training_base,
+            total_events=len(sorted_events),
+            seconds_per_sim_minute=self.clock.seconds_per_sim_minute,
+        )
+
+        event_index = 0
+        prev_time = scenario_base
 
         while self._running and event_index < len(sorted_events):
             try:
-                # Wait for interval (respects pause)
-                if event_index > 0:
-                    await self.clock.wait_interval()
+                next_event = sorted_events[event_index]
+                current_scenario_time = next_event.scheduled_time
+
+                # Wait proportional to scenario time gap
+                if event_index > 0 and current_scenario_time != prev_time:
+                    await self.clock.wait_for_gap(prev_time, current_scenario_time)
+                elif event_index > 0:
+                    # Same timestamp as previous -> small pause for readability
+                    await asyncio.sleep(2.0)
 
                 if not self._running:
                     break
 
-                # Advance simulation time to next event's time
-                next_event = sorted_events[event_index]
-                self.clock.advance_to(next_event.scheduled_time)
+                # Compute rebased sim time: training_base + (current - scenario_base)
+                bh, bm = map(int, scenario_base.split(":"))
+                ch, cm = map(int, current_scenario_time.split(":"))
+                th, tm = map(int, training_base.split(":"))
+                offset_min = (ch * 60 + cm) - (bh * 60 + bm)
+                rebased_min = (th * 60 + tm) + offset_min
+                rebased_time = f"{rebased_min // 60:02d}:{rebased_min % 60:02d}"
+
+                self.clock.advance_to(rebased_time)
                 await self.state_manager.update_sim_time(self.clock.current_sim_time)
 
-                # Collect all events at this same timestamp
-                current_time = next_event.scheduled_time
+                # Collect all events at this same scenario timestamp
                 batch = []
-                while event_index < len(sorted_events) and sorted_events[event_index].scheduled_time == current_time:
+                while (
+                    event_index < len(sorted_events)
+                    and sorted_events[event_index].scheduled_time == current_scenario_time
+                ):
                     batch.append(sorted_events[event_index])
                     event_index += 1
 
-                # Mark them in scheduler and process
+                # Process batch
                 for event in batch:
                     event.injected = True
                     event.injected_at = datetime.now()
+                    # Update event's scheduled_time to rebased time for display
+                    event.scheduled_time = rebased_time
                     self.task_manager.extract_from_event(event)
                     await self._process_event(event)
+
+                prev_time = current_scenario_time
 
                 # Mark overdue tasks
                 self.task_manager.mark_overdue(self.clock.sim_time_str)
 
-                # Check for omissions on previous events
+                # Check for omissions
                 if self.adaptation_engine:
                     consequences = await self.adaptation_engine.check_omissions(
                         self.clock.current_sim_time

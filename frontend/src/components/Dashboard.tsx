@@ -6,11 +6,13 @@ import { StatusPanel } from './StatusPanel';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
-const INTERVAL_OPTIONS = [
-  { label: '10秒', value: 10 },
-  { label: '30秒', value: 30 },
-  { label: '60秒', value: 60 },
-  { label: '120秒', value: 120 },
+// seconds_per_sim_minute: how many real seconds = 1 minute of scenario time
+const SPEED_OPTIONS = [
+  { label: '高速 (2秒/分)', value: 2 },
+  { label: '速い (4秒/分)', value: 4 },
+  { label: '標準 (8秒/分)', value: 8 },
+  { label: 'ゆっくり (15秒/分)', value: 15 },
+  { label: '超低速 (30秒/分)', value: 30 },
 ];
 
 interface Props {
@@ -28,7 +30,7 @@ export function Dashboard({ sessionInfo, participantId }: Props) {
   const [simTime, setSimTime] = useState('');
   const [started, setStarted] = useState(false);
   const [paused, setPaused] = useState(false);
-  const [eventInterval, setEventInterval] = useState(30);
+  const [timeScale, setTimeScale] = useState(8);
 
   // Process incoming WebSocket messages
   useEffect(() => {
@@ -78,15 +80,15 @@ export function Dashboard({ sessionInfo, participantId }: Props) {
     setPaused(false);
   };
 
-  const handleIntervalChange = async (seconds: number) => {
-    setEventInterval(seconds);
+  const handleSpeedChange = async (secondsPerMin: number) => {
+    setTimeScale(secondsPerMin);
     try {
       await fetch(
-        `${API_BASE}/api/sessions/${sessionInfo.session_id}/interval?seconds=${seconds}`,
+        `${API_BASE}/api/sessions/${sessionInfo.session_id}/interval?seconds=${secondsPerMin}`,
         { method: 'POST' }
       );
     } catch (e) {
-      console.error('Failed to set interval', e);
+      console.error('Failed to set speed', e);
     }
   };
 
@@ -149,11 +151,11 @@ export function Dashboard({ sessionInfo, participantId }: Props) {
             <span style={{ fontFamily: 'monospace', fontSize: 18 }}>訓練時刻 {simTime}</span>
           )}
 
-          {/* Event interval control */}
+          {/* Speed control */}
           {started && (
             <select
-              value={eventInterval}
-              onChange={(e) => handleIntervalChange(Number(e.target.value))}
+              value={timeScale}
+              onChange={(e) => handleSpeedChange(Number(e.target.value))}
               style={{
                 padding: '4px 8px',
                 borderRadius: 4,
@@ -163,9 +165,9 @@ export function Dashboard({ sessionInfo, participantId }: Props) {
                 fontSize: 12,
               }}
             >
-              {INTERVAL_OPTIONS.map((opt) => (
+              {SPEED_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
-                  間隔: {opt.label}
+                  {opt.label}
                 </option>
               ))}
             </select>

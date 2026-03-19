@@ -1,4 +1,4 @@
-"""Simulation clock - event-driven with configurable interval between events."""
+"""Simulation clock - scenario-interval-based time progression."""
 
 import asyncio
 from datetime import datetime, timedelta
@@ -6,35 +6,44 @@ from datetime import datetime, timedelta
 from src.models.enums import DifficultyLevel
 
 
-# Default interval between events (real seconds)
-DEFAULT_EVENT_INTERVALS: dict[DifficultyLevel, float] = {
-    DifficultyLevel.BEGINNER: 60.0,      # 60 seconds between events
-    DifficultyLevel.INTERMEDIATE: 30.0,  # 30 seconds
-    DifficultyLevel.ADVANCED: 15.0,      # 15 seconds
+# How many real seconds correspond to 1 scenario-minute, by difficulty
+# e.g., BEGINNER: 1 scenario-minute = 15 real seconds
+DEFAULT_SECONDS_PER_SIM_MINUTE: dict[DifficultyLevel, float] = {
+    DifficultyLevel.BEGINNER: 15.0,
+    DifficultyLevel.INTERMEDIATE: 8.0,
+    DifficultyLevel.ADVANCED: 4.0,
 }
+
+# Minimum real wait even for simultaneous events (0-minute gap)
+MIN_WAIT_SECONDS = 2.0
 
 
 class SimulationClock:
-    """Event-driven simulation clock with configurable interval.
+    """Scenario-interval-based simulation clock.
 
-    Instead of continuous time compression, the clock advances to the next
-    event's scheduled time after a configurable real-time interval.
+    Time progression follows the actual intervals between events in the
+    uploaded scenario. The real wait time is proportional to the scenario
+    time gap, scaled by `seconds_per_sim_minute`.
 
-    This gives participants a fixed amount of real time to respond to each event,
-    regardless of the gap between scenario timestamps.
+    Example with seconds_per_sim_minute=8:
+      - Scenario gap 0 min (simultaneous) -> wait 2 sec (MIN_WAIT)
+      - Scenario gap 2 min -> wait 16 sec
+      - Scenario gap 4 min -> wait 32 sec
+
+    The scale factor can be adjusted at runtime via the UI.
     """
 
     def __init__(
         self,
         sim_start_time: str = "06:00",
-        event_interval_seconds: float = 30.0,
+        seconds_per_sim_minute: float = 8.0,
     ):
         h, m = map(int, sim_start_time.split(":"))
         today = datetime.now().replace(hour=h, minute=m, second=0, microsecond=0)
         self._sim_start = today
         self._current_sim_time = today
         self._real_start: datetime | None = None
-        self._event_interval = event_interval_seconds
+        self._seconds_per_sim_minute = seconds_per_sim_minute
         self._paused = False
         self._running = False
 
@@ -43,10 +52,10 @@ class SimulationClock:
         cls,
         difficulty: DifficultyLevel,
         sim_start_time: str = "06:00",
-        event_interval_seconds: float | None = None,
+        seconds_per_sim_minute: float | None = None,
     ):
-        interval = event_interval_seconds or DEFAULT_EVENT_INTERVALS[difficulty]
-        return cls(sim_start_time=sim_start_time, event_interval_seconds=interval)
+        scale = seconds_per_sim_minute or DEFAULT_SECONDS_PER_SIM_MINUTE[difficulty]
+        return cls(sim_start_time=sim_start_time, seconds_per_sim_minute=scale)
 
     def start(self):
         self._real_start = datetime.now()
@@ -65,12 +74,21 @@ class SimulationClock:
         return self._current_sim_time.strftime("%H:%M")
 
     @property
+    def seconds_per_sim_minute(self) -> float:
+        return self._seconds_per_sim_minute
+
+    @seconds_per_sim_minute.setter
+    def seconds_per_sim_minute(self, value: float):
+        self._seconds_per_sim_minute = max(0.5, value)
+
+    # Keep backward compat with existing code that uses event_interval
+    @property
     def event_interval(self) -> float:
-        return self._event_interval
+        return self._seconds_per_sim_minute
 
     @event_interval.setter
     def event_interval(self, seconds: float):
-        self._event_interval = max(1.0, seconds)
+        self._seconds_per_sim_minute = max(0.5, seconds)
 
     @property
     def elapsed_real_minutes(self) -> float:
@@ -84,11 +102,9 @@ class SimulationClock:
         self._current_sim_time = self._current_sim_time.replace(hour=h, minute=m, second=0)
 
     def advance_by_minutes(self, minutes: int):
-        """Advance simulation time by N minutes."""
         self._current_sim_time += timedelta(minutes=minutes)
 
     def pause(self) -> bool:
-        """Pause the simulation. Always allowed at any difficulty."""
         if not self._running or self._paused:
             return False
         self._paused = True
@@ -108,21 +124,42 @@ class SimulationClock:
         self._running = False
 
     def has_reached(self, sim_time_str: str) -> bool:
-        """Check if simulation has reached the given time (HH:MM)."""
         h, m = map(int, sim_time_str.split(":"))
         target = self._sim_start.replace(hour=h, minute=m, second=0)
         return self._current_sim_time >= target
 
-    async def wait_interval(self):
-        """Wait for the configured event interval (real seconds).
-        Checks pause state every 0.5s so pause is responsive.
+    def calc_wait_seconds(self, from_time: str, to_time: str) -> float:
+        """Calculate real wait seconds based on scenario time gap.
+
+        Args:
+            from_time: Current event time (HH:MM)
+            to_time: Next event time (HH:MM)
+
+        Returns:
+            Real seconds to wait, at least MIN_WAIT_SECONDS.
         """
+        h1, m1 = map(int, from_time.split(":"))
+        h2, m2 = map(int, to_time.split(":"))
+        gap_minutes = (h2 * 60 + m2) - (h1 * 60 + m1)
+
+        if gap_minutes <= 0:
+            return MIN_WAIT_SECONDS
+
+        return max(MIN_WAIT_SECONDS, gap_minutes * self._seconds_per_sim_minute)
+
+    async def wait_for_gap(self, from_time: str, to_time: str):
+        """Wait proportional to the scenario time gap. Respects pause."""
+        total = self.calc_wait_seconds(from_time, to_time)
         elapsed = 0.0
-        while elapsed < self._event_interval:
+        while elapsed < total:
             if not self._running:
                 return
             if self._paused:
                 await asyncio.sleep(0.5)
-                continue  # Don't count paused time
+                continue
             await asyncio.sleep(0.5)
             elapsed += 0.5
+
+    async def wait_interval(self):
+        """Backward-compat: wait a fixed interval."""
+        await self.wait_for_gap("00:00", f"00:{int(self._seconds_per_sim_minute):02d}")
