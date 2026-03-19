@@ -1,38 +1,69 @@
 """Load scenarios from training-scenario-generator output (Excel/JSON)."""
 
-
 import json
+import re
 from pathlib import Path
 
 import structlog
 
 from src.models.enums import SOURCE_TO_AGENT, AgentRole, DifficultyLevel
-from src.models.scenario import ScenarioConfig, ScenarioEvent
+from src.models.scenario import ScenarioConfig, ScenarioEvent, TrainingLevelInfo
 
 logger = structlog.get_logger()
-
-# Column name mapping from training-scenario-generator Excel output
-EXCEL_COLUMN_MAP = {
-    "付与番号": "event_id",
-    "付与内容": "title",
-    "時間": "scheduled_time",
-    "情報源": "source",
-    "内容_管理用詳細": "content_admin",
-    "内容_訓練者向け": "content_trainee",
-    "狙い": "training_objective",
-    "訓練の効果": "training_effect",
-    "期待される対応行動": "expected_actions",
-    "想定される課題": "expected_issues",
-    "地形情報や想定される被害の特徴": "terrain_info",
-    "水位状況": "water_level_status",
-    "想定される二次災害のリスク": "secondary_disaster_risks",
-}
 
 # Response window adjustments by difficulty
 RESPONSE_WINDOW_MULTIPLIERS = {
     DifficultyLevel.BEGINNER: 2.0,
     DifficultyLevel.INTERMEDIATE: 1.0,
     DifficultyLevel.ADVANCED: 0.75,
+}
+
+# Column name aliases: real Excel column name -> canonical field name
+# Supports both the original format and the real scenario format
+COLUMN_ALIASES = {
+    # Event ID
+    "状況付与番号": "event_id",
+    "付与番号": "event_id",
+    "event_id": "event_id",
+    # Title
+    "付与内容": "title",
+    "title": "title",
+    # Time
+    "時刻": "scheduled_time",
+    "時間": "scheduled_time",
+    "scheduled_time": "scheduled_time",
+    # Date
+    "日付": "date",
+    "date": "date",
+    # Source
+    "情報源": "source",
+    "source": "source",
+    # Content
+    "内容_管理用詳細": "content_admin",
+    "content_admin": "content_admin",
+    "内容_訓練者向け": "content_trainee",
+    "content_trainee": "content_trainee",
+    # Training info
+    "狙い": "training_objective",
+    "training_objective": "training_objective",
+    "訓練の効果": "training_effect",
+    "training_effect": "training_effect",
+    "期待される対応行動": "expected_actions",
+    "expected_actions": "expected_actions",
+    "想定される課題": "expected_issues",
+    "expected_issues": "expected_issues",
+    # Terrain and hazard
+    "地形情報や想定される被害の特徴": "terrain_info",
+    "terrain_info": "terrain_info",
+    "水位状況": "water_level_status",
+    "water_level_status": "water_level_status",
+    "想定される二次災害のリスク": "secondary_disaster_risks",
+    "secondary_disaster_risks": "secondary_disaster_risks",
+    # Weather/river context
+    "気象情報": "weather_info",
+    "weather_info": "weather_info",
+    "河川情報": "river_info",
+    "river_info": "river_info",
 }
 
 
@@ -44,48 +75,113 @@ def _resolve_target_agent(source: str) -> AgentRole:
     return AgentRole.GENERAL_AFFAIRS
 
 
+def _safe_str(value) -> str:
+    """Convert a cell value to string, handling None and newlines."""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _normalize_time(time_str: str) -> str:
+    """Normalize time string to HH:MM format.
+
+    Handles formats like '13:38', '8:00', datetime objects, etc.
+    """
+    if not time_str:
+        return "00:00"
+
+    # If it's already HH:MM
+    match = re.match(r"^(\d{1,2}):(\d{2})", str(time_str))
+    if match:
+        h, m = int(match.group(1)), int(match.group(2))
+        return f"{h:02d}:{m:02d}"
+
+    return str(time_str)[:5]
+
+
+def _map_row_to_fields(row_data: dict[str, object]) -> dict[str, str]:
+    """Map a row dict (with original column names) to canonical field names."""
+    mapped = {}
+    for col_name, value in row_data.items():
+        if col_name is None:
+            continue
+        canonical = COLUMN_ALIASES.get(col_name)
+        if canonical:
+            mapped[canonical] = _safe_str(value)
+    return mapped
+
+
+def _build_event(fields: dict[str, str], response_multiplier: float) -> ScenarioEvent | None:
+    """Build a ScenarioEvent from mapped fields. Returns None if no event_id."""
+    event_id = fields.get("event_id", "")
+    if not event_id:
+        return None
+
+    event = ScenarioEvent(
+        event_id=event_id,
+        title=fields.get("title", ""),
+        date=fields.get("date", ""),
+        scheduled_time=_normalize_time(fields.get("scheduled_time", "00:00")),
+        source=fields.get("source", ""),
+        content_admin=fields.get("content_admin", ""),
+        content_trainee=fields.get("content_trainee", ""),
+        training_objective=fields.get("training_objective", ""),
+        training_effect=fields.get("training_effect", ""),
+        expected_actions=fields.get("expected_actions", ""),
+        expected_issues=fields.get("expected_issues", ""),
+        terrain_info=fields.get("terrain_info", ""),
+        water_level_status=fields.get("water_level_status", ""),
+        secondary_disaster_risks=fields.get("secondary_disaster_risks", ""),
+        weather_info=fields.get("weather_info", ""),
+        river_info=fields.get("river_info", ""),
+        response_window_minutes=int(10 * response_multiplier),
+    )
+    event.target_agent = _resolve_target_agent(event.source)
+    return event
+
+
+def _build_alert_timeline(events: list[ScenarioEvent]) -> list[dict]:
+    """Extract alert timeline from weather_info/river_info fields across events."""
+    timeline = []
+    seen = set()
+    for event in events:
+        for info_field in [event.weather_info, event.river_info]:
+            if info_field and info_field not in seen:
+                seen.add(info_field)
+                timeline.append({
+                    "time": event.scheduled_time,
+                    "info": info_field,
+                })
+    return timeline
+
+
 def load_scenario_from_json(path: str | Path, difficulty: DifficultyLevel) -> ScenarioConfig:
     """Load a scenario from a JSON file."""
     path = Path(path)
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
 
-    events = []
     response_multiplier = RESPONSE_WINDOW_MULTIPLIERS[difficulty]
+    events = []
 
     for item in data.get("events", data if isinstance(data, list) else []):
-        event = ScenarioEvent(
-            event_id=str(item.get("付与番号", item.get("event_id", ""))),
-            title=item.get("付与内容", item.get("title", "")),
-            scheduled_time=item.get("時間", item.get("scheduled_time", "00:00")),
-            source=item.get("情報源", item.get("source", "")),
-            content_admin=item.get("内容_管理用詳細", item.get("content_admin", "")),
-            content_trainee=item.get("内容_訓練者向け", item.get("content_trainee", "")),
-            training_objective=item.get("狙い", item.get("training_objective", "")),
-            training_effect=item.get("訓練の効果", item.get("training_effect", "")),
-            expected_actions=item.get("期待される対応行動", item.get("expected_actions", "")),
-            expected_issues=item.get("想定される課題", item.get("expected_issues", "")),
-            terrain_info=item.get(
-                "地形情報や想定される被害の特徴", item.get("terrain_info", "")
-            ),
-            water_level_status=item.get("水位状況", item.get("water_level_status", "")),
-            secondary_disaster_risks=item.get(
-                "想定される二次災害のリスク", item.get("secondary_disaster_risks", "")
-            ),
-            response_window_minutes=int(10 * response_multiplier),
-        )
-        event.target_agent = _resolve_target_agent(event.source)
-        events.append(event)
+        fields = _map_row_to_fields(item)
+        event = _build_event(fields, response_multiplier)
+        if event:
+            events.append(event)
 
-    # Sort by scheduled time
     events.sort(key=lambda e: e.scheduled_time)
 
     config = ScenarioConfig(
         municipality=data.get("municipality", path.stem),
         difficulty=difficulty,
         events=events,
-        alert_timeline=data.get("alert_timeline", []),
+        alert_timeline=data.get("alert_timeline", _build_alert_timeline(events)),
     )
+
+    if events:
+        config.sim_start_time = events[0].scheduled_time
+        config.sim_end_time = events[-1].scheduled_time
 
     logger.info("scenario_loaded", path=str(path), event_count=len(events))
     return config
@@ -94,71 +190,130 @@ def load_scenario_from_json(path: str | Path, difficulty: DifficultyLevel) -> Sc
 def load_scenario_from_excel(
     path: str | Path, difficulty: DifficultyLevel
 ) -> ScenarioConfig:
-    """Load a scenario from an Excel file (training-scenario-generator output)."""
+    """Load a scenario from an Excel file (training-scenario-generator output).
+
+    Supports the real scenario format with:
+    - Sheet 'シナリオ': main events (columns B-Q)
+    - Sheet '訓練レベル情報': training level metadata
+    - Sheet '地理情報': GeoJSON geographic data
+    - Sheet '参照シナリオ': reference scenarios
+    """
     import openpyxl
 
     path = Path(path)
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    ws = wb.active
+
+    # --- Load シナリオ sheet ---
+    scenario_sheet = None
+    for name in ["シナリオ", "Sheet1"]:
+        if name in wb.sheetnames:
+            scenario_sheet = wb[name]
+            break
+    if scenario_sheet is None:
+        scenario_sheet = wb.active
 
     # Read headers from first row
-    headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+    headers = [cell.value for cell in next(scenario_sheet.iter_rows(min_row=1, max_row=1))]
 
-    events = []
     response_multiplier = RESPONSE_WINDOW_MULTIPLIERS[difficulty]
+    events = []
 
-    for row in ws.iter_rows(min_row=2, values_only=True):
+    # Track last known date/weather/river for rows that inherit from above
+    last_date = ""
+    last_weather = ""
+    last_river = ""
+
+    for row in scenario_sheet.iter_rows(min_row=2, values_only=True):
         row_data = dict(zip(headers, row))
-        if not row_data.get("付与番号") and not row_data.get("event_id"):
-            continue
+        fields = _map_row_to_fields(row_data)
 
-        event = ScenarioEvent(
-            event_id=str(row_data.get("付与番号", row_data.get("event_id", ""))),
-            title=str(row_data.get("付与内容", row_data.get("title", ""))),
-            scheduled_time=str(row_data.get("時間", row_data.get("scheduled_time", "00:00"))),
-            source=str(row_data.get("情報源", row_data.get("source", ""))),
-            content_admin=str(
-                row_data.get("内容_管理用詳細", row_data.get("content_admin", ""))
-            ),
-            content_trainee=str(
-                row_data.get("内容_訓練者向け", row_data.get("content_trainee", ""))
-            ),
-            training_objective=str(
-                row_data.get("狙い", row_data.get("training_objective", ""))
-            ),
-            expected_actions=str(
-                row_data.get("期待される対応行動", row_data.get("expected_actions", ""))
-            ),
-            expected_issues=str(
-                row_data.get("想定される課題", row_data.get("expected_issues", ""))
-            ),
-            terrain_info=str(
-                row_data.get(
-                    "地形情報や想定される被害の特徴", row_data.get("terrain_info", "")
-                )
-            ),
-            water_level_status=str(
-                row_data.get("水位状況", row_data.get("water_level_status", ""))
-            ),
-            secondary_disaster_risks=str(
-                row_data.get(
-                    "想定される二次災害のリスク",
-                    row_data.get("secondary_disaster_risks", ""),
-                )
-            ),
-            response_window_minutes=int(10 * response_multiplier),
-        )
-        event.target_agent = _resolve_target_agent(event.source)
-        events.append(event)
+        # Inherit date/weather/river from previous row if empty (merged cells)
+        if fields.get("date"):
+            last_date = fields["date"]
+        else:
+            fields["date"] = last_date
 
-    wb.close()
+        if fields.get("weather_info"):
+            last_weather = fields["weather_info"]
+        else:
+            fields["weather_info"] = last_weather
+
+        if fields.get("river_info"):
+            last_river = fields["river_info"]
+        else:
+            fields["river_info"] = last_river
+
+        event = _build_event(fields, response_multiplier)
+        if event:
+            events.append(event)
+
     events.sort(key=lambda e: e.scheduled_time)
 
+    # --- Extract municipality from filename ---
+    # Pattern: 上益城郡嘉島町_体制構築_シナリオ_20260123_172311.xlsx
+    stem = path.stem
+    municipality = stem.split("_")[0] if "_" in stem else stem
+
+    # --- Extract training level from filename or sheet ---
+    training_level = ""
+    parts = stem.split("_")
+    if len(parts) >= 2:
+        training_level = parts[1]  # e.g., "体制構築"
+
+    # --- Load 訓練レベル情報 sheet ---
+    training_level_info = None
+    if "訓練レベル情報" in wb.sheetnames:
+        ws_level = wb["訓練レベル情報"]
+        level_data = {}
+        for row in ws_level.iter_rows(values_only=True):
+            if row[0]:
+                level_data[str(row[0])] = _safe_str(row[1]) if len(row) > 1 else ""
+
+        training_level_info = TrainingLevelInfo(
+            training_level=level_data.get("訓練レベル", training_level),
+            objective=level_data.get("狙い", ""),
+            response_guidelines=level_data.get("想定のレベル及び応答要領", ""),
+            event_count=int(level_data.get("状況付与数", "0") or "0"),
+            related_agencies=level_data.get("関係機関", ""),
+        )
+        if training_level_info.training_level:
+            training_level = training_level_info.training_level
+
+    # --- Load 地理情報 sheet ---
+    geojson_data = ""
+    if "地理情報" in wb.sheetnames:
+        ws_geo = wb["地理情報"]
+        geo_parts = []
+        for row in ws_geo.iter_rows(min_row=2, values_only=True):
+            if row[0]:
+                geo_parts.append(str(row[0]))
+        if geo_parts:
+            geojson_data = "\n".join(geo_parts)
+
+    wb.close()
+
+    # Build alert timeline from weather/river info changes
+    alert_timeline = _build_alert_timeline(events)
+
     config = ScenarioConfig(
-        municipality=path.stem.split("_")[0] if "_" in path.stem else path.stem,
+        municipality=municipality,
+        training_level=training_level,
+        training_level_info=training_level_info,
         difficulty=difficulty,
         events=events,
+        alert_timeline=alert_timeline,
+        geojson_data=geojson_data,
     )
 
-    logger.info("scenario_loaded_excel", path=str(path), event_count=len(events))
+    if events:
+        config.sim_start_time = events[0].scheduled_time
+        config.sim_end_time = events[-1].scheduled_time
+
+    logger.info(
+        "scenario_loaded_excel",
+        path=str(path),
+        municipality=municipality,
+        training_level=training_level,
+        event_count=len(events),
+    )
     return config

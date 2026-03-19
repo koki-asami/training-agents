@@ -1,6 +1,5 @@
 """Scenario data models - maps to training-scenario-generator output."""
 
-
 from datetime import datetime
 
 from pydantic import BaseModel, Field
@@ -11,9 +10,10 @@ from .enums import AgentRole, DifficultyLevel
 class ScenarioEvent(BaseModel):
     """A single scenario event (状況付与) from the training-scenario-generator."""
 
-    event_id: str = Field(description="付与番号 (e.g., '2-1', '3')")
+    event_id: str = Field(description="状況付与番号 (e.g., '2-1', '3')")
     title: str = Field(description="付与内容")
-    scheduled_time: str = Field(description="時間 (HH:MM format)")
+    date: str = Field(default="", description="日付 (e.g., '５月２１日')")
+    scheduled_time: str = Field(description="時刻 (HH:MM format)")
     source: str = Field(description="情報源 (住民, 消防, etc.)")
     content_admin: str = Field(description="内容_管理用詳細")
     content_trainee: str = Field(description="内容_訓練者向け")
@@ -25,6 +25,10 @@ class ScenarioEvent(BaseModel):
     water_level_status: str = Field(default="", description="水位状況")
     secondary_disaster_risks: str = Field(default="", description="想定される二次災害のリスク")
 
+    # Context fields from Excel (気象情報・河川情報 columns)
+    weather_info: str = Field(default="", description="気象情報（その時点での気象状況）")
+    river_info: str = Field(default="", description="河川情報（その時点での河川状況）")
+
     # Derived/runtime fields
     target_agent: AgentRole = AgentRole.GENERAL_AFFAIRS
     response_window_minutes: int = Field(default=10, description="Expected response time window")
@@ -34,14 +38,28 @@ class ScenarioEvent(BaseModel):
     response_at: datetime | None = None
 
 
+class TrainingLevelInfo(BaseModel):
+    """訓練レベル情報 sheet data."""
+
+    training_level: str = Field(default="", description="訓練レベル")
+    objective: str = Field(default="", description="狙い")
+    response_guidelines: str = Field(default="", description="想定のレベル及び応答要領")
+    event_count: int = Field(default=0, description="状況付与数")
+    related_agencies: str = Field(default="", description="関係機関")
+
+
 class ScenarioConfig(BaseModel):
     """Configuration for a training scenario."""
 
     municipality: str = Field(description="市町村名")
     municipality_en: str = Field(default="")
     training_level: str = Field(default="指揮判断", description="訓練レベル")
+    training_level_info: TrainingLevelInfo | None = Field(
+        default=None, description="訓練レベル詳細情報"
+    )
     difficulty: DifficultyLevel = DifficultyLevel.INTERMEDIATE
     geojson_path: str = Field(default="", description="Path to enhanced GeoJSON")
+    geojson_data: str = Field(default="", description="Inline GeoJSON from 地理情報 sheet")
     events: list[ScenarioEvent] = Field(default_factory=list)
     alert_timeline: list[dict] = Field(
         default_factory=list, description="Weather alert progression timeline"
