@@ -1,10 +1,11 @@
 """Scenario Master - the orchestrator agent that controls the simulation."""
 
 import json
+import os
 
 import structlog
 
-from src.agents.base_agent import BaseAgent
+from src.agents.base_agent import BaseAgent, LLM_PROVIDER
 from src.agents.prompts.scenario_master import SCENARIO_MASTER_PROMPT
 from src.engine.message_bus import MessageBus
 from src.engine.state_manager import StateManager
@@ -40,10 +41,15 @@ class ScenarioMaster(BaseAgent):
             current_state="（訓練開始前）",
         )
 
+        if LLM_PROVIDER == "openai":
+            default_model = os.getenv("SCENARIO_MASTER_MODEL", "gpt-4o")
+        else:
+            default_model = os.getenv("SCENARIO_MASTER_MODEL", "claude-opus-4-20250514")
+
         super().__init__(
             role=AgentRole.SCENARIO_MASTER,
             system_prompt=system_prompt,
-            model="claude-opus-4-20250514",
+            model=default_model,
         )
 
     def update_system_prompt(self):
