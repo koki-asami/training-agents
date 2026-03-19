@@ -111,11 +111,26 @@ def _map_row_to_fields(row_data: dict[str, object]) -> dict[str, str]:
     return mapped
 
 
-def _build_event(fields: dict[str, str], response_multiplier: float) -> ScenarioEvent | None:
-    """Build a ScenarioEvent from mapped fields. Returns None if no event_id."""
+def _build_event(
+    fields: dict[str, str], response_multiplier: float, row_index: int = 0
+) -> ScenarioEvent | None:
+    """Build a ScenarioEvent from mapped fields.
+
+    Returns None only if there's no meaningful content (no title AND no content).
+    Auto-generates event_id and scheduled_time if missing.
+    """
     event_id = fields.get("event_id", "")
-    if not event_id:
+    title = fields.get("title", "")
+    content_trainee = fields.get("content_trainee", "")
+    content_admin = fields.get("content_admin", "")
+
+    # Skip rows with no meaningful content at all
+    if not title and not content_trainee and not content_admin:
         return None
+
+    # Auto-generate event_id if missing
+    if not event_id:
+        event_id = str(row_index)
 
     event = ScenarioEvent(
         event_id=event_id,
@@ -164,9 +179,9 @@ def load_scenario_from_json(path: str | Path, difficulty: DifficultyLevel) -> Sc
     response_multiplier = RESPONSE_WINDOW_MULTIPLIERS[difficulty]
     events = []
 
-    for item in data.get("events", data if isinstance(data, list) else []):
+    for i, item in enumerate(data.get("events", data if isinstance(data, list) else [])):
         fields = _map_row_to_fields(item)
-        event = _build_event(fields, response_multiplier)
+        event = _build_event(fields, response_multiplier, row_index=i + 1)
         if event:
             events.append(event)
 
@@ -223,7 +238,9 @@ def load_scenario_from_excel(
     last_weather = ""
     last_river = ""
 
+    row_index = 0
     for row in scenario_sheet.iter_rows(min_row=2, values_only=True):
+        row_index += 1
         row_data = dict(zip(headers, row))
         fields = _map_row_to_fields(row_data)
 
@@ -243,9 +260,18 @@ def load_scenario_from_excel(
         else:
             fields["river_info"] = last_river
 
-        event = _build_event(fields, response_multiplier)
+        event = _build_event(fields, response_multiplier, row_index=row_index)
         if event:
             events.append(event)
+
+    # If no events have a real scheduled_time, auto-generate at 2-minute intervals
+    has_times = any(e.scheduled_time != "00:00" for e in events)
+    if not has_times and events:
+        base_h, base_m = 9, 0  # default start at 09:00
+        for i, event in enumerate(events):
+            total_min = base_h * 60 + base_m + i * 2
+            event.scheduled_time = f"{total_min // 60:02d}:{total_min % 60:02d}"
+        logger.info("auto_generated_times", event_count=len(events), start="09:00", interval_min=2)
 
     events.sort(key=lambda e: e.scheduled_time)
 

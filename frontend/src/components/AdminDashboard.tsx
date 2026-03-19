@@ -110,6 +110,7 @@ interface TimelineData {
   revisions: RevisionHistory[];
   modified_event_ids: string[];
   state_summary: DisasterStateSummary;
+  participants: { id: string; name: string; role: string; role_name: string }[];
 }
 
 interface Props {
@@ -208,12 +209,21 @@ export function AdminDashboard({ sessionId }: Props) {
             >
               更新
             </button>
-            <a
-              href="/"
-              style={{ padding: '4px 12px', background: '#4B5563', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, textDecoration: 'none' }}
-            >
-              セッション画面
-            </a>
+            {data.participants.length > 0 ? (
+              <a
+                href={`/join/${data.session_id}/${data.participants[0].id}`}
+                style={{ padding: '4px 12px', background: '#2563EB', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, textDecoration: 'none' }}
+              >
+                訓練画面 ({data.participants[0].role_name})
+              </a>
+            ) : (
+              <a
+                href="/"
+                style={{ padding: '4px 12px', background: '#4B5563', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, textDecoration: 'none' }}
+              >
+                セッション作成
+              </a>
+            )}
           </div>
         </div>
 

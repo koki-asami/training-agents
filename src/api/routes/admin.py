@@ -139,6 +139,15 @@ async def get_timeline(session_id: str):
         "revisions": runner.scenario_updater.get_histories_for_api() if runner.scenario_updater else [],
         "modified_event_ids": runner.scenario_updater.get_modified_event_ids() if runner.scenario_updater else [],
         "state_summary": runner.state_manager.get_state_summary(),
+        "participants": [
+            {
+                "id": p.participant_id,
+                "name": p.name,
+                "role": p.role.value,
+                "role_name": ROLE_DISPLAY_NAMES.get(p.role, (p.role.value,))[0],
+            }
+            for p in runner.session.participants
+        ],
     }
 
 
