@@ -217,6 +217,30 @@ async def create_session(
     config.municipality = municipality
     config.difficulty = difficulty
 
+    import structlog
+    _logger = structlog.get_logger()
+    _logger.info(
+        "session_scenario_loaded",
+        municipality=municipality,
+        difficulty=difficulty.value,
+        event_count=len(config.events),
+        first_event=config.events[0].title if config.events else "(none)",
+        first_event_content_len=len(config.events[0].content_trainee) if config.events else 0,
+    )
+    # Log first 3 events for verification
+    for e in config.events[:3]:
+        _logger.info(
+            "scenario_event_preview",
+            event_id=e.event_id,
+            time=e.scheduled_time,
+            title=e.title,
+            source=e.source,
+            target=e.target_agent.value,
+            content_trainee_len=len(e.content_trainee),
+            content_admin_len=len(e.content_admin),
+            expected_actions_len=len(e.expected_actions),
+        )
+
     # Build session
     session = _build_session(config, role_assignments_parsed)
 

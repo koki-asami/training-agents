@@ -1,8 +1,11 @@
 """Admin dashboard endpoints - scenario master / controller view."""
 
+import structlog
 from fastapi import APIRouter, HTTPException
 
 from src.models.enums import ROLE_DISPLAY_NAMES, AgentRole
+
+logger = structlog.get_logger()
 
 router = APIRouter()
 
@@ -19,6 +22,24 @@ async def get_timeline(session_id: str):
     runner = active_sessions.get(session_id)
     if not runner:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    logger.info(
+        "timeline_requested",
+        session_id=session_id,
+        total_events=len(runner.config.events),
+        phase=runner.session.phase.value,
+    )
+    # Log first event data for debugging
+    if runner.config.events:
+        e0 = runner.config.events[0]
+        logger.info(
+            "timeline_first_event",
+            event_id=e0.event_id,
+            title=e0.title,
+            content_trainee_len=len(e0.content_trainee),
+            content_admin_len=len(e0.content_admin),
+            content_trainee_preview=e0.content_trainee[:100],
+        )
 
     # Build event timeline
     events_timeline = []
