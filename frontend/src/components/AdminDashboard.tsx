@@ -208,6 +208,12 @@ export function AdminDashboard({ sessionId }: Props) {
             >
               更新
             </button>
+            <a
+              href="/"
+              style={{ padding: '4px 12px', background: '#4B5563', color: 'white', border: 'none', borderRadius: 4, fontSize: 12, textDecoration: 'none' }}
+            >
+              セッション画面
+            </a>
           </div>
         </div>
 
