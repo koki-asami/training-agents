@@ -38,14 +38,13 @@ AI Agentによる自治体向け状況付与訓練シミュレーションシス
 
 - Python 3.11+
 - Node.js 18+
+- [uv](https://docs.astral.sh/uv/) (Pythonパッケージマネージャ)
 
 ### インストール
 
 ```bash
 # バックエンド
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+uv sync
 
 # フロントエンド
 cd frontend
@@ -79,8 +78,7 @@ OPENAI_MODEL=gpt-4o
 
 ```bash
 # バックエンド（ターミナル1）
-source .venv/bin/activate
-uvicorn src.api.app:app --reload
+uv run uvicorn src.api.app:app --reload
 
 # フロントエンド（ターミナル2）
 cd frontend
