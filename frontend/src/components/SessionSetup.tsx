@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { AgentRole, DifficultyLevel, RoleAssignment, SessionInfo } from '../types/simulation';
 import { ROLE_DISPLAY_NAMES } from '../types/simulation';
 
@@ -19,7 +19,7 @@ interface Props {
 export function SessionSetup({ onSessionCreated }: Props) {
   const [municipality, setMunicipality] = useState('熊本市');
   const [difficulty, setDifficulty] = useState<DifficultyLevel>('intermediate');
-  const [scenarioPath, setScenarioPath] = useState('data/scenarios/sample.json');
+  const [scenarioFile, setScenarioFile] = useState<File | null>(null);
   const [assignments, setAssignments] = useState<RoleAssignment[]>(
     ASSIGNABLE_ROLES.map((role) => ({
       role,
@@ -29,6 +29,7 @@ export function SessionSetup({ onSessionCreated }: Props) {
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const toggleHuman = (index: number) => {
     setAssignments((prev) =>
@@ -40,19 +41,38 @@ export function SessionSetup({ onSessionCreated }: Props) {
     );
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    if (file) {
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      if (ext !== 'json' && ext !== 'xlsx') {
+        setError('JSON または Excel (.xlsx) ファイルを選択してください');
+        setScenarioFile(null);
+        return;
+      }
+      setError('');
+    }
+    setScenarioFile(file);
+  };
+
   const handleCreate = async () => {
+    if (!scenarioFile) {
+      setError('シナリオファイルを選択してください');
+      return;
+    }
+
     setLoading(true);
     setError('');
     try {
+      const formData = new FormData();
+      formData.append('scenario_file', scenarioFile);
+      formData.append('difficulty', difficulty);
+      formData.append('municipality', municipality);
+      formData.append('role_assignments', JSON.stringify(assignments));
+
       const res = await fetch(`${API_BASE}/api/sessions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scenario_path: scenarioPath,
-          difficulty,
-          municipality,
-          role_assignments: assignments,
-        }),
+        body: formData,
       });
       if (!res.ok) {
         const err = await res.json();
@@ -60,7 +80,6 @@ export function SessionSetup({ onSessionCreated }: Props) {
       }
       const info: SessionInfo = await res.json();
 
-      // Get the first human participant ID
       const firstParticipant = info.participants[0];
       if (firstParticipant) {
         onSessionCreated(info, firstParticipant.id);
@@ -86,13 +105,76 @@ export function SessionSetup({ onSessionCreated }: Props) {
         />
       </div>
 
+      {/* File upload */}
       <div style={{ marginBottom: 16 }}>
-        <label style={{ display: 'block', fontWeight: 'bold', marginBottom: 4 }}>シナリオファイル</label>
-        <input
-          value={scenarioPath}
-          onChange={(e) => setScenarioPath(e.target.value)}
-          style={{ width: '100%', padding: 8, border: '1px solid #ccc', borderRadius: 4 }}
-        />
+        <label style={{ display: 'block', fontWeight: 'bold', marginBottom: 4 }}>
+          シナリオファイル
+        </label>
+        <div
+          onClick={() => fileInputRef.current?.click()}
+          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const file = e.dataTransfer.files?.[0];
+            if (file) {
+              const ext = file.name.split('.').pop()?.toLowerCase();
+              if (ext === 'json' || ext === 'xlsx') {
+                setScenarioFile(file);
+                setError('');
+              } else {
+                setError('JSON または Excel (.xlsx) ファイルを選択してください');
+              }
+            }
+          }}
+          style={{
+            border: `2px dashed ${scenarioFile ? '#2563EB' : '#D1D5DB'}`,
+            borderRadius: 8,
+            padding: '24px 16px',
+            textAlign: 'center',
+            cursor: 'pointer',
+            background: scenarioFile ? '#EFF6FF' : '#F9FAFB',
+            transition: 'all 0.15s',
+          }}
+        >
+          {scenarioFile ? (
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 'bold', color: '#2563EB' }}>
+                {scenarioFile.name}
+              </div>
+              <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
+                {(scenarioFile.size / 1024).toFixed(1)} KB
+              </div>
+              <div
+                style={{ fontSize: 12, color: '#DC2626', marginTop: 4, cursor: 'pointer' }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setScenarioFile(null);
+                  if (fileInputRef.current) fileInputRef.current.value = '';
+                }}
+              >
+                ファイルを変更
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 28, marginBottom: 4 }}>+</div>
+              <div style={{ fontSize: 14, color: '#6B7280' }}>
+                クリックまたはドラッグ&ドロップでファイルを選択
+              </div>
+              <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 4 }}>
+                JSON / Excel (.xlsx) 対応
+              </div>
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,.xlsx"
+            onChange={handleFileChange}
+            style={{ display: 'none' }}
+          />
+        </div>
       </div>
 
       <div style={{ marginBottom: 16 }}>
@@ -182,17 +264,17 @@ export function SessionSetup({ onSessionCreated }: Props) {
 
       <button
         onClick={handleCreate}
-        disabled={loading}
+        disabled={loading || !scenarioFile}
         style={{
           width: '100%',
           padding: 12,
-          background: loading ? '#9CA3AF' : '#DC2626',
+          background: loading || !scenarioFile ? '#9CA3AF' : '#DC2626',
           color: 'white',
           border: 'none',
           borderRadius: 6,
           fontSize: 16,
           fontWeight: 'bold',
-          cursor: loading ? 'not-allowed' : 'pointer',
+          cursor: loading || !scenarioFile ? 'not-allowed' : 'pointer',
         }}
       >
         {loading ? '作成中...' : '訓練セッションを作成'}

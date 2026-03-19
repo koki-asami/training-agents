@@ -1,38 +1,27 @@
 """Session management endpoints."""
 
-
+import json
+import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from src.engine.simulation_runner import SimulationRunner
-from src.loaders.scenario_loader import load_scenario_from_json
+from src.loaders.scenario_loader import (
+    load_scenario_from_excel,
+    load_scenario_from_json,
+)
 from src.models.enums import ASSIGNABLE_ROLES, AgentRole, DifficultyLevel
 from src.models.session import AgentAssignment, Participant, SimulationSession
 
 router = APIRouter()
 
-# Shared session store (imported from app.py at runtime)
-_sessions: dict[str, SimulationRunner] = {}
-
 
 def get_sessions_store():
     from src.api.app import active_sessions
+
     return active_sessions
-
-
-class RoleAssignment(BaseModel):
-    role: AgentRole
-    is_human: bool = False
-    participant_name: str | None = None
-
-
-class CreateSessionRequest(BaseModel):
-    scenario_path: str = Field(description="Path to scenario JSON file")
-    difficulty: DifficultyLevel = DifficultyLevel.INTERMEDIATE
-    municipality: str = "熊本市"
-    role_assignments: list[RoleAssignment] = Field(default_factory=list)
 
 
 class CreateSessionResponse(BaseModel):
@@ -42,57 +31,45 @@ class CreateSessionResponse(BaseModel):
     human_roles: list[str]
 
 
-@router.post("/sessions", response_model=CreateSessionResponse)
-async def create_session(request: CreateSessionRequest):
-    """Create a new training simulation session."""
-    sessions = get_sessions_store()
-
-    # Load scenario
-    scenario_path = Path(request.scenario_path)
-    if not scenario_path.exists():
-        raise HTTPException(status_code=404, detail=f"Scenario file not found: {request.scenario_path}")
-
-    config = load_scenario_from_json(scenario_path, request.difficulty)
-    config.municipality = request.municipality
-    config.difficulty = request.difficulty
-
-    # Build assignments
+def _build_session(config, role_assignments_raw: list[dict]) -> SimulationSession:
+    """Build a SimulationSession from config and role assignments."""
     assignments = []
     participants = []
-
-    # Process explicit role assignments
     assigned_roles = set()
-    for ra in request.role_assignments:
-        if ra.is_human and ra.role not in ASSIGNABLE_ROLES:
+
+    for ra in role_assignments_raw:
+        role = AgentRole(ra["role"])
+        is_human = ra.get("is_human", False)
+
+        if is_human and role not in ASSIGNABLE_ROLES:
             raise HTTPException(
                 status_code=400,
-                detail=f"Role {ra.role.value} cannot be assigned to a human",
+                detail=f"Role {role.value} cannot be assigned to a human",
             )
 
         participant = None
-        if ra.is_human:
-            participant = Participant(name=ra.participant_name or "参加者", role=ra.role)
+        if is_human:
+            participant = Participant(name=ra.get("participant_name") or "参加者", role=role)
             participants.append(participant)
 
         assignments.append(
             AgentAssignment(
-                role=ra.role,
-                is_human=ra.is_human,
+                role=role,
+                is_human=is_human,
                 participant_id=participant.participant_id if participant else None,
             )
         )
-        assigned_roles.add(ra.role)
+        assigned_roles.add(role)
 
     # Fill unassigned roles with AI
-    all_roles = [
+    for role in [
         AgentRole.COMMANDER,
         AgentRole.GENERAL_AFFAIRS,
         AgentRole.FIRE_DEPARTMENT,
         AgentRole.CONSTRUCTION,
         AgentRole.WELFARE,
         AgentRole.WEATHER,
-    ]
-    for role in all_roles:
+    ]:
         if role not in assigned_roles:
             assignments.append(AgentAssignment(role=role, is_human=False))
 
@@ -106,12 +83,67 @@ async def create_session(request: CreateSessionRequest):
             )
         )
 
-    # Create session
-    session = SimulationSession(
+    return SimulationSession(
         config=config,
         assignments=assignments,
         participants=participants,
     )
+
+
+@router.post("/sessions", response_model=CreateSessionResponse)
+async def create_session(
+    scenario_file: UploadFile = File(..., description="シナリオファイル (.json or .xlsx)"),
+    difficulty: DifficultyLevel = Form(DifficultyLevel.INTERMEDIATE),
+    municipality: str = Form("熊本市"),
+    role_assignments: str = Form("[]", description="JSON array of role assignments"),
+):
+    """Create a new training simulation session with an uploaded scenario file.
+
+    - scenario_file: JSON or Excel (.xlsx) file from training-scenario-generator
+    - difficulty: beginner / intermediate / advanced
+    - municipality: 自治体名
+    - role_assignments: JSON string, e.g. [{"role":"commander","is_human":true,"participant_name":"田中"}]
+    """
+    sessions = get_sessions_store()
+
+    # Parse role assignments
+    try:
+        role_assignments_parsed = json.loads(role_assignments)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid role_assignments JSON")
+
+    # Determine file type and load
+    filename = scenario_file.filename or "scenario.json"
+    suffix = Path(filename).suffix.lower()
+
+    if suffix not in (".json", ".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {suffix}. Use .json or .xlsx",
+        )
+
+    # Save uploaded file to temp location
+    content = await scenario_file.read()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        if suffix == ".json":
+            config = load_scenario_from_json(tmp_path, difficulty)
+        else:
+            config = load_scenario_from_excel(tmp_path, difficulty)
+    except Exception as e:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Failed to parse scenario file: {e}")
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    config.municipality = municipality
+    config.difficulty = difficulty
+
+    # Build session
+    session = _build_session(config, role_assignments_parsed)
 
     # Create runner
     runner = SimulationRunner(session)
@@ -123,10 +155,10 @@ async def create_session(request: CreateSessionRequest):
         session_id=session.session_id,
         participants=[
             {"id": p.participant_id, "name": p.name, "role": p.role.value}
-            for p in participants
+            for p in session.participants
         ],
-        ai_roles=[a.role.value for a in assignments if not a.is_human],
-        human_roles=[a.role.value for a in assignments if a.is_human],
+        ai_roles=[a.role.value for a in session.assignments if not a.is_human],
+        human_roles=[a.role.value for a in session.assignments if a.is_human],
     )
 
 
@@ -167,7 +199,6 @@ async def get_session(session_id: str):
 
 @router.post("/sessions/{session_id}/start")
 async def start_session(session_id: str):
-    """Start a simulation session."""
     sessions = get_sessions_store()
     runner = sessions.get(session_id)
     if not runner:
@@ -179,7 +210,6 @@ async def start_session(session_id: str):
 
 @router.post("/sessions/{session_id}/stop")
 async def stop_session(session_id: str):
-    """Stop a simulation session."""
     sessions = get_sessions_store()
     runner = sessions.get(session_id)
     if not runner:
@@ -191,7 +221,6 @@ async def stop_session(session_id: str):
 
 @router.post("/sessions/{session_id}/pause")
 async def pause_session(session_id: str):
-    """Pause a simulation (beginner only)."""
     sessions = get_sessions_store()
     runner = sessions.get(session_id)
     if not runner:
