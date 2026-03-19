@@ -4,8 +4,11 @@ import json
 import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+import structlog
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
+
+logger = structlog.get_logger()
 
 from src.engine.simulation_runner import SimulationRunner
 from src.loaders.scenario_loader import (
@@ -217,9 +220,7 @@ async def create_session(
     config.municipality = municipality
     config.difficulty = difficulty
 
-    import structlog
-    _logger = structlog.get_logger()
-    _logger.info(
+    logger.info(
         "session_scenario_loaded",
         municipality=municipality,
         difficulty=difficulty.value,
@@ -229,7 +230,7 @@ async def create_session(
     )
     # Log first 3 events for verification
     for e in config.events[:3]:
-        _logger.info(
+        logger.info(
             "scenario_event_preview",
             event_id=e.event_id,
             time=e.scheduled_time,
@@ -341,14 +342,13 @@ async def resume_session(session_id: str):
 
 
 @router.post("/sessions/{session_id}/interval")
-async def set_event_interval(session_id: str, seconds: float):
+async def set_event_interval(session_id: str, seconds: float = Query(..., ge=0.5, le=300)):
+    """Change the time scale (real seconds per sim minute)."""
     sessions = get_sessions_store()
     runner = sessions.get(session_id)
     if not runner:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if seconds < 1 or seconds > 300:
-        raise HTTPException(status_code=400, detail="Interval must be between 1 and 300 seconds")
-
     await runner.set_event_interval(seconds)
+    logger.info("interval_updated", session_id=session_id, seconds=seconds)
     return {"status": "interval_updated", "seconds": seconds}
