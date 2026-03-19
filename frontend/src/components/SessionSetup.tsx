@@ -42,14 +42,12 @@ export function SessionSetup({ onSessionCreated }: Props) {
   const [error, setError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Fetch cached scenarios on mount
-  useEffect(() => {
+  const fetchScenarios = () => {
     fetch(`${API_BASE}/api/scenarios`)
       .then((res) => res.json())
       .then((data) => {
         const list: CachedScenario[] = data.scenarios || [];
         setCachedScenarios(list);
-        // Auto-select most recent (first in list, sorted by modified desc)
         if (list.length > 0) {
           setSelectedCached(list[0].filename);
           setScenarioSource('cached');
@@ -58,7 +56,26 @@ export function SessionSetup({ onSessionCreated }: Props) {
         }
       })
       .catch(() => setScenarioSource('upload'));
-  }, []);
+  };
+
+  // Fetch cached scenarios on mount
+  useEffect(() => { fetchScenarios(); }, []);
+
+  const handleDeleteCached = async (filename: string) => {
+    if (!confirm(`「${filename}」を削除しますか？`)) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/scenarios/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json();
+        setError(err.detail || 'Failed to delete');
+        return;
+      }
+      fetchScenarios();
+      if (selectedCached === filename) setSelectedCached('');
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
 
   const toggleHuman = (index: number) => {
     setAssignments((prev) =>
@@ -222,11 +239,37 @@ export function SessionSetup({ onSessionCreated }: Props) {
                       {s.size_kb} KB
                     </div>
                   </div>
-                  {s === cachedScenarios[0] && (
-                    <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 8, background: '#DBEAFE', color: '#1E40AF' }}>
-                      最新
-                    </span>
-                  )}
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
+                    {s === cachedScenarios[0] && (
+                      <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 8, background: '#DBEAFE', color: '#1E40AF' }}>
+                        最新
+                      </span>
+                    )}
+                    {!s.filename.startsWith('sample/') && (
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleDeleteCached(s.filename);
+                        }}
+                        title="削除"
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: '#D1D5DB',
+                          fontSize: 14,
+                          padding: '2px 4px',
+                          borderRadius: 4,
+                          lineHeight: 1,
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.color = '#EF4444')}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = '#D1D5DB')}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
                 </label>
               ))
             )}

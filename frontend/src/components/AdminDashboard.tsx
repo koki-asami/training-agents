@@ -490,7 +490,7 @@ function getMatrixCellBg(event: TimelineEvent): string {
   return '#FFFBEB';
 }
 
-/* ─── Revision Popup ─── */
+/* ─── Event Detail Popup ─── */
 
 const TRIGGER_LABELS: Record<string, string> = {
   participant_action: '参加者の対応',
@@ -519,6 +519,8 @@ function RevisionPopup({
   history: RevisionHistory | null;
   onClose: () => void;
 }) {
+  const [tab, setTab] = useState<'detail' | 'revisions'>('detail');
+
   return (
     <div
       onClick={onClose}
@@ -538,137 +540,193 @@ function RevisionPopup({
           background: 'white',
           borderRadius: 12,
           width: '90%',
-          maxWidth: 800,
-          maxHeight: '85vh',
-          overflow: 'auto',
+          maxWidth: 900,
+          maxHeight: '90vh',
+          overflow: 'hidden',
           boxShadow: '0 25px 50px rgba(0,0,0,0.25)',
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
         {/* Header */}
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <div style={{ fontSize: 11, color: '#6B7280' }}>#{event.event_id} / {event.sim_time}</div>
-            <h2 style={{ fontSize: 16, margin: '2px 0 0' }}>{event.title}</h2>
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid #E5E7EB', flexShrink: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
+                <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#6B7280' }}>#{event.event_id}</span>
+                <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#6B7280' }}>{event.sim_time}</span>
+                <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, background: ROLE_COLORS[event.target_agent] + '20', color: ROLE_COLORS[event.target_agent] || '#666' }}>
+                  {event.target_agent_name}
+                </span>
+                <span style={{ fontSize: 11, color: '#9CA3AF' }}>情報源: {event.source}</span>
+                <StatusBadge event={event} />
+                {event.is_modified && (
+                  <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 6, background: '#EDE9FE', color: '#7C3AED' }}>
+                    更新{event.revision_count}回
+                  </span>
+                )}
+              </div>
+              <h2 style={{ fontSize: 16, margin: 0 }}>{event.title}</h2>
+            </div>
+            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#9CA3AF', lineHeight: 1 }}>×</button>
           </div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <StatusBadge event={event} />
-            {history?.is_modified && (
-              <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 8, background: '#EDE9FE', color: '#7C3AED' }}>
-                {history.revision_count}回更新
-              </span>
-            )}
-            {history?.is_dynamic && (
-              <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 8, background: '#FEF3C7', color: '#92400E' }}>
-                動的生成
-              </span>
-            )}
-            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#9CA3AF' }}>
-              ×
+
+          {/* Tabs */}
+          <div style={{ display: 'flex', gap: 0, marginTop: 10 }}>
+            <button
+              onClick={() => setTab('detail')}
+              style={{
+                padding: '6px 16px', border: 'none', cursor: 'pointer', fontSize: 12,
+                borderBottom: `2px solid ${tab === 'detail' ? '#3B82F6' : 'transparent'}`,
+                background: 'none', fontWeight: tab === 'detail' ? 'bold' : 'normal',
+                color: tab === 'detail' ? '#1F2937' : '#6B7280',
+              }}
+            >
+              状況付与詳細
+            </button>
+            <button
+              onClick={() => setTab('revisions')}
+              style={{
+                padding: '6px 16px', border: 'none', cursor: 'pointer', fontSize: 12,
+                borderBottom: `2px solid ${tab === 'revisions' ? '#7C3AED' : 'transparent'}`,
+                background: 'none', fontWeight: tab === 'revisions' ? 'bold' : 'normal',
+                color: tab === 'revisions' ? '#7C3AED' : '#6B7280',
+              }}
+            >
+              変更履歴 {history && history.revision_count > 0 ? `(${history.revision_count})` : ''}
             </button>
           </div>
         </div>
 
-        {/* Current content */}
-        <div style={{ padding: '12px 20px', borderBottom: '1px solid #F3F4F6' }}>
-          <h3 style={{ fontSize: 13, color: '#6B7280', marginBottom: 8 }}>現在の状況付与内容</h3>
-          <div style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 8 }}>
-            <div style={{ fontWeight: 'bold', marginBottom: 4 }}>訓練者向け:</div>
-            <div style={{ padding: '6px 10px', background: '#F9FAFB', borderRadius: 4, whiteSpace: 'pre-wrap' }}>
-              {event.content_trainee}
-            </div>
-          </div>
-          <div style={{ fontSize: 12, color: '#6B7280' }}>
-            <strong>期待される対応:</strong> {event.expected_actions}
-          </div>
+        {/* Body */}
+        <div style={{ overflow: 'auto', flex: 1 }}>
+          {tab === 'detail' ? (
+            <PopupDetailTab event={event} />
+          ) : (
+            <PopupRevisionTab event={event} history={history} />
+          )}
         </div>
 
-        {/* Revision history */}
-        {history && history.revisions.length > 0 ? (
-          <div style={{ padding: '12px 20px' }}>
-            <h3 style={{ fontSize: 13, color: '#7C3AED', marginBottom: 12 }}>
-              変更履歴 ({history.revision_count}件)
-            </h3>
-            {history.revisions.map((rev) => (
-              <div
-                key={rev.revision_id}
-                style={{
-                  marginBottom: 16,
-                  padding: 12,
-                  borderRadius: 8,
-                  border: '1px solid #E5E7EB',
-                  background: '#FAFAFA',
-                }}
-              >
-                {/* Revision header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <span style={{ fontWeight: 'bold', fontSize: 12 }}>
-                      更新 #{rev.revision_number}
-                    </span>
-                    <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 6, background: '#EDE9FE', color: '#7C3AED' }}>
-                      {TRIGGER_LABELS[rev.trigger] || rev.trigger}
-                    </span>
-                    <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 6, background: '#F3F4F6', color: '#6B7280' }}>
-                      {FIELD_LABELS[rev.field_name] || rev.field_name}
-                    </span>
-                  </div>
-                  <span style={{ fontSize: 11, color: '#9CA3AF' }}>
-                    訓練時刻 {rev.sim_time}
-                  </span>
-                </div>
-
-                {/* Reason */}
-                <div style={{ fontSize: 12, color: '#1F2937', marginBottom: 8, padding: '4px 8px', background: '#FEF3C7', borderRadius: 4 }}>
-                  <strong>変更理由:</strong> {rev.reason}
-                </div>
-
-                {/* Diff view */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 'bold', color: '#DC2626', marginBottom: 4 }}>変更前（オリジナル）</div>
-                    <div style={{ fontSize: 12, padding: '6px 8px', background: '#FEF2F2', borderRadius: 4, whiteSpace: 'pre-wrap', maxHeight: 150, overflow: 'auto' }}>
-                      {rev.original_value || '(なし)'}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 'bold', color: '#15803D', marginBottom: 4 }}>変更後</div>
-                    <div style={{ fontSize: 12, padding: '6px 8px', background: '#F0FDF4', borderRadius: 4, whiteSpace: 'pre-wrap', maxHeight: 150, overflow: 'auto' }}>
-                      {rev.new_value || '(なし)'}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Trigger detail */}
-                {rev.trigger_detail && (
-                  <div style={{ marginTop: 8, fontSize: 11, color: '#6B7280' }}>
-                    <strong>トリガー詳細:</strong> {rev.trigger_detail.substring(0, 200)}
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {/* Original snapshot */}
-            <div style={{ marginTop: 12, padding: 12, borderRadius: 8, border: '1px dashed #D1D5DB' }}>
-              <h4 style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>オリジナルのシナリオ（ベース）</h4>
-              {Object.entries(history.original_snapshot).map(([key, value]) => {
-                if (!value) return null;
-                return (
-                  <div key={key} style={{ marginBottom: 4 }}>
-                    <span style={{ fontSize: 11, color: '#9CA3AF' }}>{FIELD_LABELS[key] || key}:</span>
-                    <div style={{ fontSize: 12, whiteSpace: 'pre-wrap', marginLeft: 8 }}>
-                      {(value as string).substring(0, 300)}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : (
-          <div style={{ padding: '20px', textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>
-            このイベントはまだ更新されていません（オリジナルのまま）
+        {/* Footer: score if available */}
+        {event.score !== null && (
+          <div style={{ padding: '8px 20px', borderTop: '1px solid #E5E7EB', background: '#F9FAFB', flexShrink: 0, display: 'flex', gap: 16, fontSize: 12 }}>
+            <span>スコア: <strong style={{ color: event.score >= 4 ? '#15803D' : event.score <= 2 ? '#DC2626' : '#CA8A04' }}>{event.score}/5</strong></span>
+            {event.response_time_minutes !== null && <span>応答時間: {event.response_time_minutes.toFixed(1)}分</span>}
+            {event.score_notes && <span style={{ color: '#6B7280' }}>{event.score_notes}</span>}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function PopupDetailTab({ event }: { event: TimelineEvent }) {
+  return (
+    <div style={{ padding: '16px 20px', fontSize: 13, lineHeight: 1.6 }}>
+      {/* Primary: trainee-facing content */}
+      <div style={{ marginBottom: 16, padding: 12, background: '#F0F9FF', borderRadius: 8, border: '1px solid #BAE6FD' }}>
+        <div style={{ fontSize: 11, fontWeight: 'bold', color: '#0369A1', marginBottom: 4 }}>訓練者向け内容</div>
+        <div style={{ whiteSpace: 'pre-wrap' }}>{event.content_trainee || '(なし)'}</div>
+      </div>
+
+      {/* Admin detail */}
+      <div style={{ marginBottom: 16, padding: 12, background: '#FAFAFA', borderRadius: 8, border: '1px solid #E5E7EB' }}>
+        <div style={{ fontSize: 11, fontWeight: 'bold', color: '#6B7280', marginBottom: 4 }}>管理用詳細</div>
+        <div style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>{event.content_admin || '(なし)'}</div>
+      </div>
+
+      {/* Two-column grid for structured info */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+        <InfoBox label="狙い" content={event.training_objective} color="#F59E0B" />
+        <InfoBox label="期待される対応行動" content={event.expected_actions} color="#22C55E" />
+        <InfoBox label="想定される課題" content={event.expected_issues} color="#EF4444" />
+        <InfoBox label="二次災害リスク" content={event.secondary_disaster_risks} color="#DC2626" />
+      </div>
+
+      {/* Context info */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <InfoBox label="気象情報" content={event.weather_info} color="#0284C7" />
+        <InfoBox label="河川情報" content={event.river_info} color="#2563EB" />
+        <InfoBox label="水位状況" content={event.water_level_status} color="#1D4ED8" />
+        <InfoBox label="地形情報" content={event.terrain_info} color="#65A30D" />
+      </div>
+
+      {/* Action taken by participant */}
+      {event.action_taken && (
+        <div style={{ marginTop: 16, padding: 12, background: '#FEF3C7', borderRadius: 8, border: '1px solid #FDE68A' }}>
+          <div style={{ fontSize: 11, fontWeight: 'bold', color: '#92400E', marginBottom: 4 }}>参加者の実際の対応</div>
+          <div style={{ whiteSpace: 'pre-wrap' }}>{event.action_taken}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InfoBox({ label, content, color }: { label: string; content: string; color: string }) {
+  if (!content || !content.trim()) return null;
+  return (
+    <div style={{ padding: '8px 10px', borderRadius: 6, borderLeft: `3px solid ${color}`, background: '#FAFAFA' }}>
+      <div style={{ fontSize: 11, fontWeight: 'bold', color: '#6B7280', marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 12, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{content}</div>
+    </div>
+  );
+}
+
+function PopupRevisionTab({ event, history }: { event: TimelineEvent; history: RevisionHistory | null }) {
+  if (!history || history.revisions.length === 0) {
+    return (
+      <div style={{ padding: 40, textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>
+        このイベントはまだ更新されていません（オリジナルのまま）
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: '16px 20px' }}>
+      {history.revisions.map((rev) => (
+        <div
+          key={rev.revision_id}
+          style={{ marginBottom: 16, padding: 12, borderRadius: 8, border: '1px solid #E5E7EB', background: '#FAFAFA' }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span style={{ fontWeight: 'bold', fontSize: 12 }}>更新 #{rev.revision_number}</span>
+              <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 6, background: '#EDE9FE', color: '#7C3AED' }}>
+                {TRIGGER_LABELS[rev.trigger] || rev.trigger}
+              </span>
+              <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 6, background: '#F3F4F6', color: '#6B7280' }}>
+                {FIELD_LABELS[rev.field_name] || rev.field_name}
+              </span>
+            </div>
+            <span style={{ fontSize: 11, color: '#9CA3AF' }}>訓練時刻 {rev.sim_time}</span>
+          </div>
+
+          <div style={{ fontSize: 12, marginBottom: 8, padding: '4px 8px', background: '#FEF3C7', borderRadius: 4 }}>
+            <strong>変更理由:</strong> {rev.reason}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 'bold', color: '#DC2626', marginBottom: 4 }}>変更前</div>
+              <div style={{ fontSize: 12, padding: '6px 8px', background: '#FEF2F2', borderRadius: 4, whiteSpace: 'pre-wrap', maxHeight: 150, overflow: 'auto' }}>
+                {rev.original_value || '(なし)'}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 'bold', color: '#15803D', marginBottom: 4 }}>変更後</div>
+              <div style={{ fontSize: 12, padding: '6px 8px', background: '#F0FDF4', borderRadius: 4, whiteSpace: 'pre-wrap', maxHeight: 150, overflow: 'auto' }}>
+                {rev.new_value || '(なし)'}
+              </div>
+            </div>
+          </div>
+
+          {rev.trigger_detail && (
+            <div style={{ marginTop: 6, fontSize: 11, color: '#6B7280' }}>
+              <strong>トリガー:</strong> {rev.trigger_detail.substring(0, 200)}
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

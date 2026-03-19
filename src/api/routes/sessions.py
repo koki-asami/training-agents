@@ -137,6 +137,22 @@ async def list_cached_scenarios():
     return {"scenarios": scenarios}
 
 
+@router.delete("/scenarios/{filename}")
+async def delete_cached_scenario(filename: str):
+    """Delete a cached scenario file."""
+    if filename.startswith("sample/"):
+        raise HTTPException(status_code=400, detail="Cannot delete sample scenarios")
+
+    # Prevent path traversal
+    safe_name = Path(filename).name
+    cached_path = SCENARIO_CACHE_DIR / safe_name
+    if not cached_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    cached_path.unlink()
+    return {"status": "deleted", "filename": safe_name}
+
+
 @router.post("/sessions", response_model=CreateSessionResponse)
 async def create_session(
     scenario_file: UploadFile | None = File(None, description="シナリオファイル (.json or .xlsx)"),
