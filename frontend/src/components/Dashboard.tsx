@@ -111,6 +111,14 @@ export function Dashboard({ sessionInfo, participantId }: Props) {
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <h1 style={{ fontSize: 16, margin: 0 }}>防災訓練シミュレーション</h1>
+          <a
+            href={`/admin/${sessionInfo.session_id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ fontSize: 11, color: '#9CA3AF', textDecoration: 'underline' }}
+          >
+            管理画面
+          </a>
           <span
             style={{
               fontSize: 11,

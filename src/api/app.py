@@ -6,7 +6,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import scoring, sessions, simulation
+from src.api.routes import admin, scoring, sessions, simulation
 
 logger = structlog.get_logger()
 
@@ -42,6 +42,7 @@ app.add_middleware(
 app.include_router(sessions.router, prefix="/api", tags=["sessions"])
 app.include_router(simulation.router, prefix="/api", tags=["simulation"])
 app.include_router(scoring.router, prefix="/api", tags=["scoring"])
+app.include_router(admin.router, prefix="/api", tags=["admin"])
 
 
 @app.get("/api/health")
