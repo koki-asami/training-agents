@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { DisasterStateSummary, SessionInfo, SimulationMessage } from '../types/simulation';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { SimClock } from './SimClock';
 import { SimulationChat } from './SimulationChat';
 import { StatusPanel } from './StatusPanel';
 
@@ -131,25 +132,10 @@ export function Dashboard({ sessionInfo, participantId }: Props) {
           >
             {connected ? '接続中' : '未接続'}
           </span>
-          {paused && (
-            <span
-              style={{
-                fontSize: 11,
-                padding: '2px 8px',
-                borderRadius: 8,
-                background: '#CA8A04',
-              }}
-            >
-              一時停止中
-            </span>
-          )}
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {/* Simulation time */}
-          {simTime && (
-            <span style={{ fontFamily: 'monospace', fontSize: 18 }}>訓練時刻 {simTime}</span>
-          )}
+          <SimClock time={simTime} variant="header" paused={paused} />
 
           {/* Speed control */}
           {started && (

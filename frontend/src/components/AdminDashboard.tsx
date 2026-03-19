@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ROLE_COLORS, ROLE_DISPLAY_NAMES } from '../types/simulation';
 import type { DisasterStateSummary } from '../types/simulation';
+import { SimClock } from './SimClock';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8002';
 
@@ -192,9 +193,7 @@ export function AdminDashboard({ sessionId }: Props) {
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontFamily: 'monospace', fontSize: 20 }}>
-              {data.current_sim_time}
-            </span>
+            <SimClock time={data.current_sim_time} variant="header" paused={data.phase === 'paused'} />
             <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
               <input
                 type="checkbox"

@@ -1,3 +1,4 @@
+import { SimClock } from './SimClock';
 import type { DisasterStateSummary } from '../types/simulation';
 
 const ALERT_LEVEL_LABELS: Record<number, { label: string; color: string; bg: string }> = {
@@ -28,12 +29,7 @@ export function StatusPanel({ state, simTime }: Props) {
     <div style={{ padding: 12, fontSize: 13, display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* Time and Alert Level */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <div style={{ fontSize: 11, color: '#999' }}>訓練時刻</div>
-          <div style={{ fontSize: 24, fontWeight: 'bold', fontFamily: 'monospace' }}>
-            {simTime || state.sim_time}
-          </div>
-        </div>
+        <SimClock time={simTime || state.sim_time} variant="panel" />
         <div
           style={{
             padding: '6px 12px',
