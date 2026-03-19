@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WSMessage } from '../types/simulation';
 
-const WS_BASE = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
+const WS_BASE = import.meta.env.VITE_WS_URL || 'ws://localhost:8001';
 
 export function useWebSocket(sessionId: string | null, participantId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);

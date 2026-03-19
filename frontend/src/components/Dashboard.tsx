@@ -4,7 +4,7 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import { SimulationChat } from './SimulationChat';
 import { StatusPanel } from './StatusPanel';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
 interface Props {
   sessionInfo: SessionInfo;

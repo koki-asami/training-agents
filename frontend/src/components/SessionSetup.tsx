@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import type { AgentRole, DifficultyLevel, RoleAssignment, SessionInfo } from '../types/simulation';
 import { ROLE_DISPLAY_NAMES } from '../types/simulation';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
 const ASSIGNABLE_ROLES: AgentRole[] = ['commander', 'soumu', 'shoubou', 'kensetsu', 'fukushi'];
 
