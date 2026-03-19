@@ -30,6 +30,8 @@ interface TimelineEvent {
   score_notes: string | null;
   response_time_minutes: number | null;
   action_taken: string | null;
+  is_modified: boolean;
+  revision_count: number;
 }
 
 interface TimelineMessage {
@@ -60,6 +62,29 @@ interface TaskItem {
   score: number | null;
 }
 
+interface Revision {
+  revision_id: string;
+  revision_number: number;
+  timestamp: string;
+  sim_time: string;
+  trigger: string;
+  trigger_detail: string;
+  field_name: string;
+  original_value: string;
+  new_value: string;
+  reason: string;
+  agent_explanation: string;
+}
+
+interface RevisionHistory {
+  event_id: string;
+  is_dynamic: boolean;
+  is_modified: boolean;
+  revision_count: number;
+  original_snapshot: Record<string, string>;
+  revisions: Revision[];
+}
+
 interface TaskSummary {
   total: number;
   by_status: Record<string, number>;
@@ -82,6 +107,8 @@ interface TimelineData {
   messages: TimelineMessage[];
   tasks: TaskItem[];
   task_summary: TaskSummary;
+  revisions: RevisionHistory[];
+  modified_event_ids: string[];
   state_summary: DisasterStateSummary;
 }
 
@@ -92,7 +119,8 @@ interface Props {
 export function AdminDashboard({ sessionId }: Props) {
   const [data, setData] = useState<TimelineData | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null);
-  const [viewMode, setViewMode] = useState<'timeline' | 'tasks' | 'messages'>('timeline');
+  const [viewMode, setViewMode] = useState<'matrix' | 'timeline' | 'tasks' | 'messages'>('matrix');
+  const [revisionPopup, setRevisionPopup] = useState<{ event: TimelineEvent; history: RevisionHistory | null } | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [error, setError] = useState('');
   const intervalRef = useRef<number | null>(null);
@@ -205,6 +233,7 @@ export function AdminDashboard({ sessionId }: Props) {
       {/* Tab bar */}
       <div style={{ display: 'flex', background: '#F3F4F6', borderBottom: '1px solid #E5E7EB' }}>
         {([
+          { key: 'matrix' as const, label: '時系列×部署' },
           { key: 'timeline' as const, label: 'イベントタイムライン' },
           { key: 'tasks' as const, label: `タスク一覧 (${data.task_summary?.total || 0})` },
           { key: 'messages' as const, label: 'メッセージログ' },
@@ -228,38 +257,417 @@ export function AdminDashboard({ sessionId }: Props) {
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* Left: timeline/messages list */}
-        <div style={{ flex: 6, overflowY: 'auto', padding: 0 }}>
-          {viewMode === 'timeline' ? (
-            <EventTimeline
-              events={data.events}
-              selectedEvent={selectedEvent}
-              onSelect={setSelectedEvent}
-            />
-          ) : viewMode === 'tasks' ? (
-            <TaskBoard
-              tasks={data.tasks}
-              summary={data.task_summary}
-              sessionId={sessionId}
-              onRefresh={fetchTimeline}
-            />
-          ) : (
-            <MessageLog messages={data.messages} />
-          )}
+      {viewMode === 'matrix' ? (
+        /* Matrix view takes full width */
+        <div style={{ flex: 1, overflow: 'auto' }}>
+          <MatrixView
+            events={data.events}
+            modifiedEventIds={data.modified_event_ids}
+            revisions={data.revisions}
+            onEventClick={(event) => {
+              const history = data.revisions.find((r) => r.event_id === event.event_id) || null;
+              setRevisionPopup({ event, history });
+            }}
+          />
+        </div>
+      ) : (
+        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+          {/* Left: timeline/messages/tasks list */}
+          <div style={{ flex: 6, overflowY: 'auto', padding: 0 }}>
+            {viewMode === 'timeline' ? (
+              <EventTimeline
+                events={data.events}
+                selectedEvent={selectedEvent}
+                onSelect={setSelectedEvent}
+              />
+            ) : viewMode === 'tasks' ? (
+              <TaskBoard
+                tasks={data.tasks}
+                summary={data.task_summary}
+                sessionId={sessionId}
+                onRefresh={fetchTimeline}
+              />
+            ) : (
+              <MessageLog messages={data.messages} />
+            )}
+          </div>
+
+          {/* Right: detail panel */}
+          <div style={{ flex: 4, overflowY: 'auto', borderLeft: '1px solid #E5E7EB', background: '#FAFAFA' }}>
+            {selectedEvent ? (
+              <EventDetail
+                event={selectedEvent}
+                messages={data.messages.filter((m) => m.related_event_id === selectedEvent.event_id)}
+              />
+            ) : (
+              <StateSummary state={data.state_summary} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Revision Popup */}
+      {revisionPopup && (
+        <RevisionPopup
+          event={revisionPopup.event}
+          history={revisionPopup.history}
+          onClose={() => setRevisionPopup(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─── Matrix View (Time x Department) ─── */
+
+const DEPT_COLUMNS = [
+  { key: 'soumu', label: '総務部' },
+  { key: 'shoubou', label: '消防局' },
+  { key: 'kensetsu', label: '建設部' },
+  { key: 'fukushi', label: '福祉部' },
+  { key: 'juumin', label: '住民' },
+  { key: 'kishou', label: '気象情報' },
+];
+
+function MatrixView({
+  events,
+  modifiedEventIds,
+  revisions,
+  onEventClick,
+}: {
+  events: TimelineEvent[];
+  modifiedEventIds: string[];
+  revisions: RevisionHistory[];
+  onEventClick: (event: TimelineEvent) => void;
+}) {
+  // Group events by time slot
+  const timeSlots: { time: string; events: TimelineEvent[] }[] = [];
+  let lastTime = '';
+  for (const e of events) {
+    if (e.sim_time !== lastTime) {
+      timeSlots.push({ time: e.sim_time, events: [e] });
+      lastTime = e.sim_time;
+    } else {
+      timeSlots[timeSlots.length - 1].events.push(e);
+    }
+  }
+
+  // Find the "current progress" boundary
+  const lastInjectedIdx = events.reduce(
+    (acc, e, i) => (e.injected ? i : acc), -1
+  );
+
+  return (
+    <div style={{ minWidth: 900 }}>
+      {/* Header row */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '80px repeat(6, 1fr)',
+          position: 'sticky',
+          top: 0,
+          zIndex: 2,
+          background: '#1F2937',
+          color: 'white',
+          fontSize: 12,
+          fontWeight: 'bold',
+        }}
+      >
+        <div style={{ padding: '8px 6px', borderRight: '1px solid #374151' }}>時刻</div>
+        {DEPT_COLUMNS.map((col) => (
+          <div
+            key={col.key}
+            style={{
+              padding: '8px 6px',
+              textAlign: 'center',
+              borderRight: '1px solid #374151',
+              background: ROLE_COLORS[col.key] ? ROLE_COLORS[col.key] + '30' : undefined,
+            }}
+          >
+            {col.label}
+          </div>
+        ))}
+      </div>
+
+      {/* Time rows */}
+      {timeSlots.map((slot, slotIdx) => {
+        // Check if this slot is past the injection frontier
+        const firstEventGlobalIdx = events.indexOf(slot.events[0]);
+        const isPast = firstEventGlobalIdx <= lastInjectedIdx;
+
+        return (
+          <div
+            key={slot.time}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '80px repeat(6, 1fr)',
+              borderBottom: '1px solid #E5E7EB',
+              background: isPast ? 'white' : '#F9FAFB',
+              opacity: isPast ? 1 : 0.5,
+            }}
+          >
+            {/* Time label */}
+            <div
+              style={{
+                padding: '6px',
+                fontFamily: 'monospace',
+                fontSize: 13,
+                fontWeight: 'bold',
+                borderRight: '1px solid #E5E7EB',
+                background: isPast ? '#F0FDF4' : '#F9FAFB',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {slot.time}
+            </div>
+
+            {/* Department cells */}
+            {DEPT_COLUMNS.map((col) => {
+              const cellEvents = slot.events.filter((e) => e.target_agent === col.key);
+              return (
+                <div
+                  key={col.key}
+                  style={{
+                    padding: 4,
+                    borderRight: '1px solid #F3F4F6',
+                    minHeight: 48,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 3,
+                  }}
+                >
+                  {cellEvents.map((event) => {
+                    const isModified = modifiedEventIds.includes(event.event_id);
+                    return (
+                      <div
+                        key={event.event_id}
+                        onClick={() => onEventClick(event)}
+                        style={{
+                          padding: '4px 6px',
+                          borderRadius: 4,
+                          fontSize: 11,
+                          lineHeight: 1.3,
+                          cursor: 'pointer',
+                          background: getMatrixCellBg(event),
+                          borderLeft: `3px solid ${getStatusColor(event)}`,
+                          border: isModified ? '2px solid #8B5CF6' : undefined,
+                          position: 'relative',
+                        }}
+                      >
+                        <div style={{ fontWeight: 'bold', marginBottom: 1 }}>
+                          #{event.event_id}
+                        </div>
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {event.title}
+                        </div>
+                        {/* Status & revision badges */}
+                        <div style={{ display: 'flex', gap: 3, marginTop: 2 }}>
+                          <StatusBadge event={event} />
+                          {isModified && (
+                            <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 6, background: '#EDE9FE', color: '#7C3AED' }}>
+                              更新{event.revision_count}回
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function getMatrixCellBg(event: TimelineEvent): string {
+  if (!event.injected) return '#F9FAFB';
+  if (event.response_received) return '#F0FDF4';
+  return '#FFFBEB';
+}
+
+/* ─── Revision Popup ─── */
+
+const TRIGGER_LABELS: Record<string, string> = {
+  participant_action: '参加者の対応',
+  omission: '対応遅延',
+  escalation: '状況悪化',
+  mitigation: '被害軽減',
+  dynamic_event: '動的イベント生成',
+  manual: '管理者による手動変更',
+};
+
+const FIELD_LABELS: Record<string, string> = {
+  content_trainee: '訓練者向け内容',
+  content_admin: '管理用詳細',
+  expected_actions: '期待される対応行動',
+  secondary_disaster_risks: '二次災害リスク',
+  water_level_status: '水位状況',
+  title: 'タイトル',
+};
+
+function RevisionPopup({
+  event,
+  history,
+  onClose,
+}: {
+  event: TimelineEvent;
+  history: RevisionHistory | null;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 100,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: 'white',
+          borderRadius: 12,
+          width: '90%',
+          maxWidth: 800,
+          maxHeight: '85vh',
+          overflow: 'auto',
+          boxShadow: '0 25px 50px rgba(0,0,0,0.25)',
+        }}
+      >
+        {/* Header */}
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280' }}>#{event.event_id} / {event.sim_time}</div>
+            <h2 style={{ fontSize: 16, margin: '2px 0 0' }}>{event.title}</h2>
+          </div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <StatusBadge event={event} />
+            {history?.is_modified && (
+              <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 8, background: '#EDE9FE', color: '#7C3AED' }}>
+                {history.revision_count}回更新
+              </span>
+            )}
+            {history?.is_dynamic && (
+              <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 8, background: '#FEF3C7', color: '#92400E' }}>
+                動的生成
+              </span>
+            )}
+            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#9CA3AF' }}>
+              ×
+            </button>
+          </div>
         </div>
 
-        {/* Right: detail panel */}
-        <div style={{ flex: 4, overflowY: 'auto', borderLeft: '1px solid #E5E7EB', background: '#FAFAFA' }}>
-          {selectedEvent ? (
-            <EventDetail
-              event={selectedEvent}
-              messages={data.messages.filter((m) => m.related_event_id === selectedEvent.event_id)}
-            />
-          ) : (
-            <StateSummary state={data.state_summary} />
-          )}
+        {/* Current content */}
+        <div style={{ padding: '12px 20px', borderBottom: '1px solid #F3F4F6' }}>
+          <h3 style={{ fontSize: 13, color: '#6B7280', marginBottom: 8 }}>現在の状況付与内容</h3>
+          <div style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 8 }}>
+            <div style={{ fontWeight: 'bold', marginBottom: 4 }}>訓練者向け:</div>
+            <div style={{ padding: '6px 10px', background: '#F9FAFB', borderRadius: 4, whiteSpace: 'pre-wrap' }}>
+              {event.content_trainee}
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: '#6B7280' }}>
+            <strong>期待される対応:</strong> {event.expected_actions}
+          </div>
         </div>
+
+        {/* Revision history */}
+        {history && history.revisions.length > 0 ? (
+          <div style={{ padding: '12px 20px' }}>
+            <h3 style={{ fontSize: 13, color: '#7C3AED', marginBottom: 12 }}>
+              変更履歴 ({history.revision_count}件)
+            </h3>
+            {history.revisions.map((rev) => (
+              <div
+                key={rev.revision_id}
+                style={{
+                  marginBottom: 16,
+                  padding: 12,
+                  borderRadius: 8,
+                  border: '1px solid #E5E7EB',
+                  background: '#FAFAFA',
+                }}
+              >
+                {/* Revision header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <span style={{ fontWeight: 'bold', fontSize: 12 }}>
+                      更新 #{rev.revision_number}
+                    </span>
+                    <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 6, background: '#EDE9FE', color: '#7C3AED' }}>
+                      {TRIGGER_LABELS[rev.trigger] || rev.trigger}
+                    </span>
+                    <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 6, background: '#F3F4F6', color: '#6B7280' }}>
+                      {FIELD_LABELS[rev.field_name] || rev.field_name}
+                    </span>
+                  </div>
+                  <span style={{ fontSize: 11, color: '#9CA3AF' }}>
+                    訓練時刻 {rev.sim_time}
+                  </span>
+                </div>
+
+                {/* Reason */}
+                <div style={{ fontSize: 12, color: '#1F2937', marginBottom: 8, padding: '4px 8px', background: '#FEF3C7', borderRadius: 4 }}>
+                  <strong>変更理由:</strong> {rev.reason}
+                </div>
+
+                {/* Diff view */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 'bold', color: '#DC2626', marginBottom: 4 }}>変更前（オリジナル）</div>
+                    <div style={{ fontSize: 12, padding: '6px 8px', background: '#FEF2F2', borderRadius: 4, whiteSpace: 'pre-wrap', maxHeight: 150, overflow: 'auto' }}>
+                      {rev.original_value || '(なし)'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 'bold', color: '#15803D', marginBottom: 4 }}>変更後</div>
+                    <div style={{ fontSize: 12, padding: '6px 8px', background: '#F0FDF4', borderRadius: 4, whiteSpace: 'pre-wrap', maxHeight: 150, overflow: 'auto' }}>
+                      {rev.new_value || '(なし)'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Trigger detail */}
+                {rev.trigger_detail && (
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#6B7280' }}>
+                    <strong>トリガー詳細:</strong> {rev.trigger_detail.substring(0, 200)}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {/* Original snapshot */}
+            <div style={{ marginTop: 12, padding: 12, borderRadius: 8, border: '1px dashed #D1D5DB' }}>
+              <h4 style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>オリジナルのシナリオ（ベース）</h4>
+              {Object.entries(history.original_snapshot).map(([key, value]) => {
+                if (!value) return null;
+                return (
+                  <div key={key} style={{ marginBottom: 4 }}>
+                    <span style={{ fontSize: 11, color: '#9CA3AF' }}>{FIELD_LABELS[key] || key}:</span>
+                    <div style={{ fontSize: 12, whiteSpace: 'pre-wrap', marginLeft: 8 }}>
+                      {(value as string).substring(0, 300)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div style={{ padding: '20px', textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>
+            このイベントはまだ更新されていません（オリジナルのまま）
+          </div>
+        )}
       </div>
     </div>
   );

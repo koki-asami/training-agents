@@ -57,6 +57,17 @@ async def get_timeline(session_id: str):
             "score_notes": score.evaluation_notes if score else None,
             "response_time_minutes": score.response_time_minutes if score else None,
             "action_taken": score.action_taken if score else None,
+            # Revision info
+            "is_modified": (
+                runner.scenario_updater.get_history(event.event_id).is_modified
+                if runner.scenario_updater and runner.scenario_updater.get_history(event.event_id)
+                else False
+            ),
+            "revision_count": (
+                runner.scenario_updater.get_history(event.event_id).revision_count
+                if runner.scenario_updater and runner.scenario_updater.get_history(event.event_id)
+                else 0
+            ),
         })
 
     # Build message timeline
@@ -104,6 +115,8 @@ async def get_timeline(session_id: str):
         "messages": messages_timeline,
         "tasks": runner.task_manager.get_tasks_for_api(),
         "task_summary": runner.task_manager.get_summary(),
+        "revisions": runner.scenario_updater.get_histories_for_api() if runner.scenario_updater else [],
+        "modified_event_ids": runner.scenario_updater.get_modified_event_ids() if runner.scenario_updater else [],
         "state_summary": runner.state_manager.get_state_summary(),
     }
 

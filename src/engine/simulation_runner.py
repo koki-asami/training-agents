@@ -20,6 +20,7 @@ from src.engine.event_scheduler import EventScheduler
 from src.engine.message_bus import MessageBus
 from src.engine.simulation_clock import SimulationClock
 from src.engine.state_manager import StateManager
+from src.engine.scenario_updater import ScenarioUpdater
 from src.engine.task_manager import TaskManager
 from src.models.enums import AgentRole, DifficultyLevel, MessageType, SimulationPhase
 from src.models.messages import SimulationMessage
@@ -64,6 +65,9 @@ class SimulationRunner:
 
         # Task tracking
         self.task_manager = TaskManager()
+
+        # Scenario revision tracking
+        self.scenario_updater: ScenarioUpdater | None = None
 
         # Control
         self._running = False
@@ -134,6 +138,12 @@ class SimulationRunner:
         self.adaptation_engine = AdaptationEngine(
             self.scenario_master, self.state_manager, self.config.difficulty
         )
+
+        # Set up scenario updater
+        self.scenario_updater = ScenarioUpdater(self.scenario_master, self.state_manager)
+        # Register all events for revision tracking
+        for event in self.config.events:
+            self.scenario_updater.register_event(event)
 
         # Subscribe Scenario Master to all messages
         self.message_bus.subscribe_broadcast()
@@ -219,6 +229,13 @@ class SimulationRunner:
                     evaluation_notes=evaluation.get("evaluation_notes", ""),
                 )
                 self.session.scores.append(score)
+
+                # Update scenario based on evaluation
+                if self.scenario_updater:
+                    await self.scenario_updater.update_event_from_action(
+                        event, content, evaluation.get("score", 3),
+                        self.clock.sim_time_str,
+                    )
                 break
 
         # Get responses from target AI agents
