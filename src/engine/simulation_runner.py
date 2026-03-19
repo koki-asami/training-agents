@@ -20,6 +20,7 @@ from src.engine.event_scheduler import EventScheduler
 from src.engine.message_bus import MessageBus
 from src.engine.simulation_clock import SimulationClock
 from src.engine.state_manager import StateManager
+from src.engine.task_manager import TaskManager
 from src.models.enums import AgentRole, DifficultyLevel, MessageType, SimulationPhase
 from src.models.messages import SimulationMessage
 from src.models.scenario import ScenarioConfig, ScenarioEvent
@@ -60,6 +61,9 @@ class SimulationRunner:
 
         # Adaptation
         self.adaptation_engine: AdaptationEngine | None = None
+
+        # Task tracking
+        self.task_manager = TaskManager()
 
         # Control
         self._running = False
@@ -189,6 +193,9 @@ class SimulationRunner:
         await self.message_bus.send(msg)
         self.session.messages.append(msg)
 
+        # Match human action against tracked tasks
+        self.task_manager.match_action(content, role.value)
+
         # Check if this responds to any tracked events
         for event in self.scheduler.get_unresponded_events():
             # Simple heuristic: if the message relates to the event's topic
@@ -292,7 +299,11 @@ class SimulationRunner:
                 for event in batch:
                     event.injected = True
                     event.injected_at = datetime.now()
+                    self.task_manager.extract_from_event(event)
                     await self._process_event(event)
+
+                # Mark overdue tasks
+                self.task_manager.mark_overdue(self.clock.sim_time_str)
 
                 # Check for omissions on previous events
                 if self.adaptation_engine:

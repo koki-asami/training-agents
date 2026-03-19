@@ -102,6 +102,8 @@ async def get_timeline(session_id: str):
         "responded_events": sum(1 for e in runner.config.events if e.response_received),
         "events": events_timeline,
         "messages": messages_timeline,
+        "tasks": runner.task_manager.get_tasks_for_api(),
+        "task_summary": runner.task_manager.get_summary(),
         "state_summary": runner.state_manager.get_state_summary(),
     }
 
@@ -149,3 +151,59 @@ async def get_event_detail(session_id: str, event_id: str):
         "related_messages": related_messages,
         "score": score.model_dump() if score else None,
     }
+
+
+@router.get("/sessions/{session_id}/tasks")
+async def get_tasks(session_id: str, status: str | None = None, role: str | None = None):
+    """Get all disaster response tasks with optional filtering.
+
+    Query params:
+    - status: pending, active, in_progress, completed, overdue, skipped
+    - role: soumu, shoubou, kensetsu, fukushi, etc.
+    """
+    from src.api.app import active_sessions
+
+    runner = active_sessions.get(session_id)
+    if not runner:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    tasks = runner.task_manager.get_tasks_for_api()
+
+    if status:
+        tasks = [t for t in tasks if t["status"] == status]
+    if role:
+        tasks = [t for t in tasks if t["responsible_role"] == role]
+
+    # Add display names
+    for t in tasks:
+        role_enum = None
+        for r in AgentRole:
+            if r.value == t["responsible_role"]:
+                role_enum = r
+                break
+        t["responsible_role_name"] = (
+            ROLE_DISPLAY_NAMES.get(role_enum, (t["responsible_role"],))[0]
+            if role_enum
+            else t["responsible_role"]
+        )
+
+    return {
+        "session_id": session_id,
+        "summary": runner.task_manager.get_summary(),
+        "tasks": tasks,
+    }
+
+
+@router.post("/sessions/{session_id}/tasks/{task_id}/complete")
+async def complete_task(session_id: str, task_id: str, score: int | None = None):
+    """Manually mark a task as completed (admin override)."""
+    from src.api.app import active_sessions
+
+    runner = active_sessions.get(session_id)
+    if not runner:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    runner.task_manager.complete_task(
+        task_id, runner.clock.sim_time_str, score
+    )
+    return {"status": "completed", "task_id": task_id}

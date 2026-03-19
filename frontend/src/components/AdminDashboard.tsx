@@ -45,6 +45,29 @@ interface TimelineMessage {
   related_event_id: string | null;
 }
 
+interface TaskItem {
+  task_id: string;
+  event_id: string;
+  title: string;
+  description: string;
+  responsible_role: string;
+  status: string;
+  priority: string;
+  sim_time_created: string;
+  sim_time_completed: string | null;
+  assigned_to: string;
+  notes: string;
+  score: number | null;
+}
+
+interface TaskSummary {
+  total: number;
+  by_status: Record<string, number>;
+  by_priority: Record<string, number>;
+  by_role: Record<string, number>;
+  completion_rate: number;
+}
+
 interface TimelineData {
   session_id: string;
   municipality: string;
@@ -57,6 +80,8 @@ interface TimelineData {
   responded_events: number;
   events: TimelineEvent[];
   messages: TimelineMessage[];
+  tasks: TaskItem[];
+  task_summary: TaskSummary;
   state_summary: DisasterStateSummary;
 }
 
@@ -67,7 +92,7 @@ interface Props {
 export function AdminDashboard({ sessionId }: Props) {
   const [data, setData] = useState<TimelineData | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null);
-  const [viewMode, setViewMode] = useState<'timeline' | 'messages'>('timeline');
+  const [viewMode, setViewMode] = useState<'timeline' | 'tasks' | 'messages'>('timeline');
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [error, setError] = useState('');
   const intervalRef = useRef<number | null>(null);
@@ -169,21 +194,25 @@ export function AdminDashboard({ sessionId }: Props) {
 
       {/* Tab bar */}
       <div style={{ display: 'flex', background: '#F3F4F6', borderBottom: '1px solid #E5E7EB' }}>
-        {(['timeline', 'messages'] as const).map((mode) => (
+        {([
+          { key: 'timeline' as const, label: 'イベントタイムライン' },
+          { key: 'tasks' as const, label: `タスク一覧 (${data.task_summary?.total || 0})` },
+          { key: 'messages' as const, label: 'メッセージログ' },
+        ]).map(({ key, label }) => (
           <button
-            key={mode}
-            onClick={() => setViewMode(mode)}
+            key={key}
+            onClick={() => setViewMode(key)}
             style={{
               padding: '8px 20px',
               border: 'none',
-              borderBottom: `2px solid ${viewMode === mode ? '#3B82F6' : 'transparent'}`,
+              borderBottom: `2px solid ${viewMode === key ? '#3B82F6' : 'transparent'}`,
               background: 'none',
               cursor: 'pointer',
-              fontWeight: viewMode === mode ? 'bold' : 'normal',
-              color: viewMode === mode ? '#1F2937' : '#6B7280',
+              fontWeight: viewMode === key ? 'bold' : 'normal',
+              color: viewMode === key ? '#1F2937' : '#6B7280',
             }}
           >
-            {mode === 'timeline' ? 'イベントタイムライン' : 'メッセージログ'}
+            {label}
           </button>
         ))}
       </div>
@@ -197,6 +226,13 @@ export function AdminDashboard({ sessionId }: Props) {
               events={data.events}
               selectedEvent={selectedEvent}
               onSelect={setSelectedEvent}
+            />
+          ) : viewMode === 'tasks' ? (
+            <TaskBoard
+              tasks={data.tasks}
+              summary={data.task_summary}
+              sessionId={sessionId}
+              onRefresh={fetchTimeline}
             />
           ) : (
             <MessageLog messages={data.messages} />
@@ -460,6 +496,217 @@ function DetailSection({ title, content, highlight }: { title: string; content: 
         }}
       >
         {content}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Task Board ─── */
+
+const TASK_STATUS_CONFIG: Record<string, { label: string; bg: string; color: string }> = {
+  pending: { label: '待機', bg: '#F3F4F6', color: '#6B7280' },
+  active: { label: '対応待ち', bg: '#FEF3C7', color: '#92400E' },
+  in_progress: { label: '対応中', bg: '#DBEAFE', color: '#1E40AF' },
+  completed: { label: '完了', bg: '#DCFCE7', color: '#15803D' },
+  overdue: { label: '超過', bg: '#FEE2E2', color: '#991B1B' },
+  skipped: { label: 'スキップ', bg: '#F3F4F6', color: '#9CA3AF' },
+};
+
+const PRIORITY_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
+  critical: { label: '緊急', color: '#DC2626', icon: '!!' },
+  high: { label: '高', color: '#EA580C', icon: '!' },
+  medium: { label: '中', color: '#CA8A04', icon: '-' },
+  low: { label: '低', color: '#6B7280', icon: '' },
+};
+
+function TaskBoard({
+  tasks,
+  summary,
+  sessionId,
+  onRefresh,
+}: {
+  tasks: TaskItem[];
+  summary: TaskSummary;
+  sessionId: string;
+  onRefresh: () => void;
+}) {
+  const [filterStatus, setFilterStatus] = useState<string>('');
+  const [filterRole, setFilterRole] = useState<string>('');
+
+  const filtered = tasks.filter((t) => {
+    if (filterStatus && t.status !== filterStatus) return false;
+    if (filterRole && t.responsible_role !== filterRole) return false;
+    return true;
+  });
+
+  // Sort: overdue first, then active, then by priority
+  const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+  const statusOrder = { overdue: 0, active: 1, in_progress: 2, pending: 3, completed: 4, skipped: 5 };
+  const sorted = [...filtered].sort((a, b) => {
+    const sa = statusOrder[a.status as keyof typeof statusOrder] ?? 9;
+    const sb = statusOrder[b.status as keyof typeof statusOrder] ?? 9;
+    if (sa !== sb) return sa - sb;
+    const pa = priorityOrder[a.priority as keyof typeof priorityOrder] ?? 9;
+    const pb = priorityOrder[b.priority as keyof typeof priorityOrder] ?? 9;
+    return pa - pb;
+  });
+
+  const handleComplete = async (taskId: string) => {
+    await fetch(`${API_BASE}/api/sessions/${sessionId}/tasks/${taskId}/complete`, { method: 'POST' });
+    onRefresh();
+  };
+
+  return (
+    <div>
+      {/* Summary bar */}
+      <div style={{ display: 'flex', gap: 8, padding: '12px 16px', background: '#F9FAFB', borderBottom: '1px solid #E5E7EB', flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ fontWeight: 'bold', fontSize: 13, marginRight: 8 }}>
+          進捗: {summary.completion_rate}%
+        </div>
+        <div style={{ flex: 1, height: 8, background: '#E5E7EB', borderRadius: 4, overflow: 'hidden', minWidth: 100 }}>
+          <div style={{ width: `${summary.completion_rate}%`, height: '100%', background: '#22C55E', transition: 'width 0.3s' }} />
+        </div>
+        {Object.entries(summary.by_status).map(([status, count]) => {
+          const cfg = TASK_STATUS_CONFIG[status];
+          return (
+            <button
+              key={status}
+              onClick={() => setFilterStatus(filterStatus === status ? '' : status)}
+              style={{
+                fontSize: 11,
+                padding: '2px 8px',
+                borderRadius: 8,
+                border: filterStatus === status ? '2px solid #3B82F6' : '1px solid transparent',
+                background: cfg?.bg || '#F3F4F6',
+                color: cfg?.color || '#333',
+                cursor: 'pointer',
+              }}
+            >
+              {cfg?.label || status}: {count}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Filter by role */}
+      <div style={{ display: 'flex', gap: 4, padding: '8px 16px', borderBottom: '1px solid #F3F4F6', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: '#9CA3AF', lineHeight: '24px' }}>部署:</span>
+        <button
+          onClick={() => setFilterRole('')}
+          style={{
+            fontSize: 11, padding: '2px 8px', borderRadius: 4, cursor: 'pointer',
+            background: !filterRole ? '#3B82F6' : '#F3F4F6',
+            color: !filterRole ? 'white' : '#666',
+            border: 'none',
+          }}
+        >
+          全て
+        </button>
+        {Object.entries(summary.by_role).map(([role, count]) => {
+          const displayName = ROLE_DISPLAY_NAMES[role as keyof typeof ROLE_DISPLAY_NAMES]?.[0] || role;
+          return (
+            <button
+              key={role}
+              onClick={() => setFilterRole(filterRole === role ? '' : role)}
+              style={{
+                fontSize: 11, padding: '2px 8px', borderRadius: 4, cursor: 'pointer',
+                background: filterRole === role ? (ROLE_COLORS[role] || '#3B82F6') : '#F3F4F6',
+                color: filterRole === role ? 'white' : ROLE_COLORS[role] || '#666',
+                border: 'none',
+              }}
+            >
+              {displayName} ({count})
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Task list */}
+      <div>
+        {sorted.map((task) => {
+          const statusCfg = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.pending;
+          const priorityCfg = PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG.medium;
+          const roleName = ROLE_DISPLAY_NAMES[task.responsible_role as keyof typeof ROLE_DISPLAY_NAMES]?.[0] || task.responsible_role;
+
+          return (
+            <div
+              key={task.task_id}
+              style={{
+                display: 'flex',
+                padding: '10px 16px',
+                borderBottom: '1px solid #F3F4F6',
+                gap: 10,
+                alignItems: 'center',
+                background: task.status === 'overdue' ? '#FEF2F2' : 'white',
+              }}
+            >
+              {/* Priority indicator */}
+              <div
+                style={{
+                  width: 4,
+                  height: 36,
+                  borderRadius: 2,
+                  background: priorityCfg.color,
+                  flexShrink: 0,
+                }}
+              />
+
+              {/* Content */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                  <span style={{ fontSize: 13, fontWeight: task.status === 'active' || task.status === 'overdue' ? 'bold' : 'normal' }}>
+                    {task.title}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: 6, fontSize: 11, color: '#6B7280', flexWrap: 'wrap' }}>
+                  <span style={{ padding: '0 4px', background: statusCfg.bg, color: statusCfg.color, borderRadius: 4 }}>
+                    {statusCfg.label}
+                  </span>
+                  <span style={{ padding: '0 4px', background: priorityCfg.color + '15', color: priorityCfg.color, borderRadius: 4 }}>
+                    {priorityCfg.label}
+                  </span>
+                  <span style={{ color: ROLE_COLORS[task.responsible_role] || '#666' }}>
+                    {roleName}
+                  </span>
+                  <span>#{task.event_id}</span>
+                  <span>{task.sim_time_created}</span>
+                  {task.notes && (
+                    <span style={{ color: '#2563EB' }} title={task.notes}>
+                      対応メモあり
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Actions */}
+              {(task.status === 'active' || task.status === 'in_progress' || task.status === 'overdue') && (
+                <button
+                  onClick={() => handleComplete(task.task_id)}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    border: '1px solid #D1D5DB',
+                    borderRadius: 4,
+                    background: 'white',
+                    cursor: 'pointer',
+                    color: '#15803D',
+                    flexShrink: 0,
+                  }}
+                >
+                  完了
+                </button>
+              )}
+              {task.status === 'completed' && (
+                <span style={{ fontSize: 16, color: '#22C55E', flexShrink: 0 }}>✓</span>
+              )}
+            </div>
+          );
+        })}
+        {sorted.length === 0 && (
+          <div style={{ padding: 40, textAlign: 'center', color: '#9CA3AF' }}>
+            {tasks.length === 0 ? 'タスクがまだありません（訓練開始後に生成されます）' : 'フィルター条件に一致するタスクがありません'}
+          </div>
+        )}
       </div>
     </div>
   );
