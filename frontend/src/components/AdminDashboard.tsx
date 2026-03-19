@@ -227,22 +227,28 @@ export function AdminDashboard({ sessionId }: Props) {
           </div>
         </div>
 
-        {/* Progress bar */}
-        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ flex: 1, height: 6, background: '#374151', borderRadius: 3, overflow: 'hidden' }}>
-            <div
-              style={{
-                width: `${progressPct}%`,
-                height: '100%',
-                background: '#3B82F6',
-                transition: 'width 0.3s',
-              }}
-            />
+        {/* Progress bar + summary stats */}
+        <div style={{ marginTop: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <div style={{ flex: 1, height: 6, background: '#374151', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ width: `${progressPct}%`, height: '100%', background: '#3B82F6', transition: 'width 0.3s' }} />
+            </div>
+            <span style={{ fontSize: 11, color: '#9CA3AF', whiteSpace: 'nowrap' }}>
+              {progressPct}%
+            </span>
           </div>
-          <span style={{ fontSize: 11, color: '#9CA3AF', whiteSpace: 'nowrap' }}>
-            {data.injected_events}/{data.total_events} イベント ({progressPct}%)
-            | 応答 {data.responded_events}
-          </span>
+          {/* Summary badges */}
+          <div style={{ display: 'flex', gap: 10, fontSize: 11 }}>
+            <StatChip label="付与済" value={data.injected_events} total={data.total_events} color="#3B82F6" />
+            <StatChip label="応答済" value={data.responded_events} total={data.injected_events || 1} color="#22C55E" />
+            <StatChip
+              label="タスク完了"
+              value={(data.task_summary?.by_status?.completed || 0) + (data.task_summary?.by_status?.in_progress || 0)}
+              total={data.task_summary?.total || 0}
+              color="#8B5CF6"
+            />
+            <StatChip label="シナリオ更新" value={data.modified_event_ids?.length || 0} total={0} color="#F59E0B" />
+          </div>
         </div>
       </header>
 
@@ -345,6 +351,17 @@ const DEPT_COLUMNS = [
   { key: 'kishou', label: '気象情報' },
 ];
 
+const SOURCE_COLORS: Record<string, string> = {
+  '住民': '#0891B2',
+  '警察': '#1E40AF',
+  '警察(110番)': '#1E40AF',
+  '消防': '#EA580C',
+  '気象台': '#0284C7',
+  '報道': '#6B7280',
+  '市町村': '#2563EB',
+  '県': '#7C3AED',
+};
+
 function MatrixView({
   events,
   modifiedEventIds,
@@ -356,32 +373,133 @@ function MatrixView({
   revisions: RevisionHistory[];
   onEventClick: (event: TimelineEvent) => void;
 }) {
-  // Group events by time slot
-  const timeSlots: { time: string; events: TimelineEvent[] }[] = [];
+  const [filterStatus, setFilterStatus] = useState<string>('');
+  const [filterModified, setFilterModified] = useState(false);
+  const [tooltip, setTooltip] = useState<{ event: TimelineEvent; x: number; y: number } | null>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const frontierRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to frontier
+  useEffect(() => {
+    if (autoScroll && frontierRef.current) {
+      frontierRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [events, autoScroll]);
+
+  // Filter events
+  const filtered = events.filter((e) => {
+    if (filterStatus === 'pending' && e.injected) return false;
+    if (filterStatus === 'injected' && (!e.injected || e.response_received)) return false;
+    if (filterStatus === 'responded' && !e.response_received) return false;
+    if (filterModified && !modifiedEventIds.includes(e.event_id)) return false;
+    return true;
+  });
+
+  // Group by time slot + track weather/river context changes
+  type SlotRow = { type: 'events'; time: string; events: TimelineEvent[] }
+    | { type: 'context'; time: string; weather: string; river: string };
+  const rows: SlotRow[] = [];
   let lastTime = '';
-  for (const e of events) {
+  let lastWeather = '';
+  let lastRiver = '';
+
+  for (const e of filtered) {
+    // Check for context change (weather/river info)
+    const weatherChanged = e.weather_info && e.weather_info !== lastWeather;
+    const riverChanged = e.river_info && e.river_info !== lastRiver;
+    if ((weatherChanged || riverChanged) && e.sim_time !== lastTime) {
+      rows.push({
+        type: 'context',
+        time: e.sim_time,
+        weather: weatherChanged ? e.weather_info : '',
+        river: riverChanged ? e.river_info : '',
+      });
+      if (e.weather_info) lastWeather = e.weather_info;
+      if (e.river_info) lastRiver = e.river_info;
+    }
+
     if (e.sim_time !== lastTime) {
-      timeSlots.push({ time: e.sim_time, events: [e] });
+      rows.push({ type: 'events', time: e.sim_time, events: [e] });
       lastTime = e.sim_time;
     } else {
-      timeSlots[timeSlots.length - 1].events.push(e);
+      const lastRow = rows[rows.length - 1];
+      if (lastRow.type === 'events') {
+        lastRow.events.push(e);
+      }
     }
   }
 
-  // Find the "current progress" boundary
-  const lastInjectedIdx = events.reduce(
-    (acc, e, i) => (e.injected ? i : acc), -1
-  );
+  // Find frontier
+  const lastInjectedIdx = events.reduce((acc, e, i) => (e.injected ? i : acc), -1);
+  const lastInjectedTime = lastInjectedIdx >= 0 ? events[lastInjectedIdx].sim_time : '';
+
+  // Status counts for filter
+  const counts = {
+    total: events.length,
+    pending: events.filter((e) => !e.injected).length,
+    injected: events.filter((e) => e.injected && !e.response_received).length,
+    responded: events.filter((e) => e.response_received).length,
+    modified: modifiedEventIds.length,
+  };
 
   return (
-    <div style={{ minWidth: 900 }}>
-      {/* Header row */}
+    <div style={{ minWidth: 900, position: 'relative' }}
+      onScroll={() => setAutoScroll(false)}
+    >
+      {/* Filter bar */}
+      <div style={{
+        display: 'flex', gap: 6, padding: '8px 12px', background: '#F9FAFB',
+        borderBottom: '1px solid #E5E7EB', position: 'sticky', top: 0, zIndex: 3,
+        alignItems: 'center', flexWrap: 'wrap',
+      }}>
+        <span style={{ fontSize: 11, color: '#6B7280', marginRight: 4 }}>フィルター:</span>
+        {([
+          { key: '', label: `全て (${counts.total})` },
+          { key: 'pending', label: `待機 (${counts.pending})` },
+          { key: 'injected', label: `付与済 (${counts.injected})` },
+          { key: 'responded', label: `応答済 (${counts.responded})` },
+        ] as const).map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => setFilterStatus(filterStatus === key ? '' : key)}
+            style={{
+              fontSize: 11, padding: '2px 8px', borderRadius: 4, border: 'none', cursor: 'pointer',
+              background: filterStatus === key ? '#3B82F6' : '#E5E7EB',
+              color: filterStatus === key ? 'white' : '#333',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+        <span style={{ width: 1, height: 16, background: '#D1D5DB' }} />
+        <button
+          onClick={() => setFilterModified(!filterModified)}
+          style={{
+            fontSize: 11, padding: '2px 8px', borderRadius: 4, border: 'none', cursor: 'pointer',
+            background: filterModified ? '#7C3AED' : '#E5E7EB',
+            color: filterModified ? 'white' : '#333',
+          }}
+        >
+          変更あり ({counts.modified})
+        </button>
+        <div style={{ flex: 1 }} />
+        {!autoScroll && (
+          <button
+            onClick={() => setAutoScroll(true)}
+            style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, border: '1px solid #D1D5DB', background: 'white', cursor: 'pointer', color: '#3B82F6' }}
+          >
+            最新へスクロール
+          </button>
+        )}
+      </div>
+
+      {/* Column header */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '80px repeat(6, 1fr)',
+          gridTemplateColumns: '72px repeat(6, 1fr)',
           position: 'sticky',
-          top: 0,
+          top: 37,
           zIndex: 2,
           background: '#1F2937',
           color: 'white',
@@ -389,12 +507,12 @@ function MatrixView({
           fontWeight: 'bold',
         }}
       >
-        <div style={{ padding: '8px 6px', borderRight: '1px solid #374151' }}>時刻</div>
+        <div style={{ padding: '6px', borderRight: '1px solid #374151', textAlign: 'center' }}>時刻</div>
         {DEPT_COLUMNS.map((col) => (
           <div
             key={col.key}
             style={{
-              padding: '8px 6px',
+              padding: '6px',
               textAlign: 'center',
               borderRight: '1px solid #374151',
               background: ROLE_COLORS[col.key] ? ROLE_COLORS[col.key] + '30' : undefined,
@@ -405,50 +523,84 @@ function MatrixView({
         ))}
       </div>
 
-      {/* Time rows */}
-      {timeSlots.map((slot, slotIdx) => {
-        // Check if this slot is past the injection frontier
-        const firstEventGlobalIdx = events.indexOf(slot.events[0]);
-        const isPast = firstEventGlobalIdx <= lastInjectedIdx;
+      {/* Rows */}
+      {rows.map((row, rowIdx) => {
+        if (row.type === 'context') {
+          // Weather/river context row
+          return (
+            <div
+              key={`ctx-${rowIdx}`}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '72px 1fr',
+                background: '#EFF6FF',
+                borderBottom: '1px solid #BFDBFE',
+                fontSize: 11,
+              }}
+            >
+              <div style={{ padding: '4px 6px', fontFamily: 'monospace', color: '#1E40AF', textAlign: 'center', borderRight: '1px solid #BFDBFE' }}>
+                {row.time}
+              </div>
+              <div style={{ padding: '4px 10px', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                {row.weather && (
+                  <span style={{ color: '#1E40AF' }}>
+                    <strong>気象:</strong> {row.weather.substring(0, 80)}{row.weather.length > 80 ? '...' : ''}
+                  </span>
+                )}
+                {row.river && (
+                  <span style={{ color: '#1E3A5F' }}>
+                    <strong>河川:</strong> {row.river.substring(0, 80)}{row.river.length > 80 ? '...' : ''}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        }
+
+        // Event row
+        const isPast = row.events.some((e) => e.injected);
+        const isFrontier = row.time === lastInjectedTime;
 
         return (
           <div
-            key={slot.time}
+            key={`row-${row.time}-${rowIdx}`}
+            ref={isFrontier ? frontierRef : undefined}
             style={{
               display: 'grid',
-              gridTemplateColumns: '80px repeat(6, 1fr)',
-              borderBottom: '1px solid #E5E7EB',
+              gridTemplateColumns: '72px repeat(6, 1fr)',
+              borderBottom: isFrontier ? '3px solid #3B82F6' : '1px solid #E5E7EB',
               background: isPast ? 'white' : '#F9FAFB',
-              opacity: isPast ? 1 : 0.5,
+              opacity: isPast ? 1 : 0.35,
             }}
           >
             {/* Time label */}
             <div
               style={{
-                padding: '6px',
+                padding: '4px 6px',
                 fontFamily: 'monospace',
                 fontSize: 13,
                 fontWeight: 'bold',
                 borderRight: '1px solid #E5E7EB',
-                background: isPast ? '#F0FDF4' : '#F9FAFB',
+                background: isFrontier ? '#DBEAFE' : isPast ? '#F0FDF4' : '#F9FAFB',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
+                color: isFrontier ? '#1D4ED8' : undefined,
               }}
             >
-              {slot.time}
+              {row.time}
             </div>
 
             {/* Department cells */}
             {DEPT_COLUMNS.map((col) => {
-              const cellEvents = slot.events.filter((e) => e.target_agent === col.key);
+              const cellEvents = row.events.filter((e) => e.target_agent === col.key);
               return (
                 <div
                   key={col.key}
                   style={{
-                    padding: 4,
+                    padding: 3,
                     borderRight: '1px solid #F3F4F6',
-                    minHeight: 48,
+                    minHeight: 44,
                     display: 'flex',
                     flexDirection: 'column',
                     gap: 3,
@@ -456,36 +608,58 @@ function MatrixView({
                 >
                   {cellEvents.map((event) => {
                     const isModified = modifiedEventIds.includes(event.event_id);
+                    const srcColor = SOURCE_COLORS[event.source] || '#6B7280';
+
                     return (
                       <div
                         key={event.event_id}
                         onClick={() => onEventClick(event)}
+                        onMouseEnter={(e) => setTooltip({ event, x: e.clientX, y: e.clientY })}
+                        onMouseLeave={() => setTooltip(null)}
                         style={{
                           padding: '4px 6px',
-                          borderRadius: 4,
+                          borderRadius: 5,
                           fontSize: 11,
-                          lineHeight: 1.3,
+                          lineHeight: 1.35,
                           cursor: 'pointer',
                           background: getMatrixCellBg(event),
-                          borderLeft: `3px solid ${getStatusColor(event)}`,
-                          border: isModified ? '2px solid #8B5CF6' : undefined,
+                          borderLeft: `3px solid ${srcColor}`,
+                          boxShadow: isModified ? '0 0 0 2px #8B5CF6' : undefined,
                           position: 'relative',
+                          transition: 'box-shadow 0.15s',
                         }}
                       >
-                        <div style={{ fontWeight: 'bold', marginBottom: 1 }}>
-                          #{event.event_id}
-                        </div>
-                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {event.title}
-                        </div>
-                        {/* Status & revision badges */}
-                        <div style={{ display: 'flex', gap: 3, marginTop: 2 }}>
-                          <StatusBadge event={event} />
-                          {isModified && (
-                            <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 6, background: '#EDE9FE', color: '#7C3AED' }}>
-                              更新{event.revision_count}回
+                        {/* Top row: ID + source badge + score dot */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                          <span style={{ fontWeight: 'bold', fontSize: 10, color: '#6B7280' }}>#{event.event_id}</span>
+                          <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 4, background: srcColor + '18', color: srcColor }}>
+                            {event.source.replace('(110番)', '').substring(0, 4)}
+                          </span>
+                          {event.score !== null && (
+                            <span style={{ fontSize: 10, color: event.score >= 4 ? '#22C55E' : event.score <= 2 ? '#EF4444' : '#F59E0B' }}>
+                              {'●'}
                             </span>
                           )}
+                          {isModified && (
+                            <span style={{ fontSize: 9, padding: '0 3px', borderRadius: 4, background: '#EDE9FE', color: '#7C3AED' }}>
+                              {event.revision_count}
+                            </span>
+                          )}
+                        </div>
+                        {/* Title (2 lines max) */}
+                        <div style={{
+                          overflow: 'hidden',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          fontSize: 11,
+                          lineHeight: 1.3,
+                        }}>
+                          {event.title}
+                        </div>
+                        {/* Status badge */}
+                        <div style={{ marginTop: 2 }}>
+                          <StatusBadge event={event} />
                         </div>
                       </div>
                     );
@@ -496,6 +670,56 @@ function MatrixView({
           </div>
         );
       })}
+
+      {/* Tooltip */}
+      {tooltip && <EventTooltip event={tooltip.event} x={tooltip.x} y={tooltip.y} />}
+    </div>
+  );
+}
+
+function EventTooltip({ event, x, y }: { event: TimelineEvent; x: number; y: number }) {
+  // Position: below and to the right of cursor, clamped to viewport
+  const left = Math.min(x + 12, window.innerWidth - 420);
+  const top = Math.min(y + 12, window.innerHeight - 300);
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        left,
+        top,
+        width: 400,
+        maxHeight: 280,
+        overflow: 'hidden',
+        background: 'white',
+        border: '1px solid #D1D5DB',
+        borderRadius: 8,
+        boxShadow: '0 10px 25px rgba(0,0,0,0.15)',
+        zIndex: 50,
+        padding: 12,
+        fontSize: 12,
+        pointerEvents: 'none',
+      }}
+    >
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+        <span style={{ fontFamily: 'monospace', color: '#6B7280' }}>#{event.event_id}</span>
+        <span style={{ fontFamily: 'monospace', color: '#6B7280' }}>{event.sim_time}</span>
+        <span style={{ fontSize: 10, padding: '1px 4px', borderRadius: 4, background: (SOURCE_COLORS[event.source] || '#666') + '18', color: SOURCE_COLORS[event.source] || '#666' }}>
+          {event.source}
+        </span>
+        <StatusBadge event={event} />
+      </div>
+      <div style={{ fontWeight: 'bold', marginBottom: 6 }}>{event.title}</div>
+      {event.content_trainee && (
+        <div style={{ color: '#374151', marginBottom: 6, lineHeight: 1.4, borderLeft: '2px solid #93C5FD', paddingLeft: 8 }}>
+          {event.content_trainee.substring(0, 150)}{event.content_trainee.length > 150 ? '...' : ''}
+        </div>
+      )}
+      {event.expected_actions && (
+        <div style={{ color: '#15803D', fontSize: 11, lineHeight: 1.4 }}>
+          <strong>期待される対応:</strong> {event.expected_actions.substring(0, 120)}{event.expected_actions.length > 120 ? '...' : ''}
+        </div>
+      )}
     </div>
   );
 }
@@ -1317,5 +1541,19 @@ function Stat({ label, value }: { label: string; value: number }) {
       <span style={{ fontSize: 12 }}>{label}</span>
       <span style={{ fontWeight: 'bold', fontFamily: 'monospace' }}>{value}</span>
     </div>
+  );
+}
+
+function StatChip({ label, value, total, color }: { label: string; value: number; total: number; color: string }) {
+  const pct = total > 0 ? Math.round((value / total) * 100) : null;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#D1D5DB' }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, display: 'inline-block' }} />
+      <span>{label}</span>
+      <span style={{ color: 'white', fontWeight: 'bold', fontFamily: 'monospace' }}>
+        {value}{total > 0 ? `/${total}` : ''}
+      </span>
+      {pct !== null && <span style={{ color: '#9CA3AF' }}>({pct}%)</span>}
+    </span>
   );
 }
