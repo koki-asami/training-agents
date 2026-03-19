@@ -100,6 +100,11 @@ export function AdminDashboard({ sessionId }: Props) {
   const fetchTimeline = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/timeline`);
+      if (res.status === 404) {
+        setError('セッションが見つかりません。サーバー再起動によりセッションが消失した可能性があります。新しいセッションを作成してください。');
+        setAutoRefresh(false);
+        return;
+      }
       if (!res.ok) throw new Error('Failed to fetch timeline');
       const json = await res.json();
       setData(json);
@@ -122,7 +127,12 @@ export function AdminDashboard({ sessionId }: Props) {
   if (!data) {
     return (
       <div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif' }}>
-        {error ? <div style={{ color: 'red' }}>{error}</div> : '読み込み中...'}
+        {error ? (
+          <div>
+            <div style={{ color: 'red', marginBottom: 16 }}>{error}</div>
+            <a href="/" style={{ color: '#2563EB' }}>セッション作成画面に戻る</a>
+          </div>
+        ) : '読み込み中...'}
       </div>
     );
   }
