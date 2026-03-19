@@ -63,7 +63,6 @@ class SimulationRunner:
 
         # Control
         self._running = False
-        self._tick_interval = 2.0  # seconds between simulation ticks
 
         # Callbacks for WebSocket integration
         self._on_message_callback = None
@@ -253,42 +252,73 @@ class SimulationRunner:
 
         return responses
 
-    async def _simulation_loop(self):
-        """Main simulation loop - runs as a background task."""
-        while self._running:
-            try:
-                sim_time = self.clock.current_sim_time
-                await self.state_manager.update_sim_time(sim_time)
+    async def set_event_interval(self, seconds: float):
+        """Change the interval between events at runtime."""
+        self.clock.event_interval = seconds
+        logger.info("event_interval_changed", seconds=seconds)
 
-                # Check for due events
-                due_events = self.scheduler.get_due_events(self.clock.sim_time_str)
-                for event in due_events:
+    async def _simulation_loop(self):
+        """Event-driven simulation loop.
+
+        Advances to the next event's time, processes it, then waits
+        the configured interval before proceeding to the next event.
+        """
+        # Get sorted event times
+        event_index = 0
+        sorted_events = sorted(self.config.events, key=lambda e: e.scheduled_time)
+
+        while self._running and event_index < len(sorted_events):
+            try:
+                # Wait for interval (respects pause)
+                if event_index > 0:
+                    await self.clock.wait_interval()
+
+                if not self._running:
+                    break
+
+                # Advance simulation time to next event's time
+                next_event = sorted_events[event_index]
+                self.clock.advance_to(next_event.scheduled_time)
+                await self.state_manager.update_sim_time(self.clock.current_sim_time)
+
+                # Collect all events at this same timestamp
+                current_time = next_event.scheduled_time
+                batch = []
+                while event_index < len(sorted_events) and sorted_events[event_index].scheduled_time == current_time:
+                    batch.append(sorted_events[event_index])
+                    event_index += 1
+
+                # Mark them in scheduler and process
+                for event in batch:
+                    event.injected = True
+                    event.injected_at = datetime.now()
                     await self._process_event(event)
 
-                # Check for omissions
+                # Check for omissions on previous events
                 if self.adaptation_engine:
-                    consequences = await self.adaptation_engine.check_omissions(sim_time)
+                    consequences = await self.adaptation_engine.check_omissions(
+                        self.clock.current_sim_time
+                    )
                     for consequence in consequences:
                         await self._handle_consequence(consequence)
 
-                # Take periodic state snapshot
-                if self.scheduler.injected_count % 5 == 0 and due_events:
+                # Periodic snapshot
+                if event_index % 5 == 0:
                     await self.state_manager.take_snapshot()
 
-                # Check end condition
-                if self.scheduler.remaining_count == 0 and not self.scheduler.get_unresponded_events():
-                    logger.info("all_events_processed")
-                    # Don't auto-stop - let human decide when to end
-
-                # Notify frontend of state update
-                if self._on_state_change_callback and due_events:
+                # Notify frontend
+                if self._on_state_change_callback:
                     await self._on_state_change_callback(self.state_manager.get_state_summary())
-
-                await asyncio.sleep(self._tick_interval)
 
             except Exception as e:
                 logger.error("simulation_loop_error", error=str(e))
-                await asyncio.sleep(self._tick_interval)
+                await asyncio.sleep(1)
+
+        # All events processed
+        if self._running:
+            logger.info("all_events_processed", total=len(sorted_events))
+            if self._on_state_change_callback:
+                await self._on_state_change_callback(self.state_manager.get_state_summary())
 
     async def _process_event(self, event: ScenarioEvent):
         """Process a single scenario event."""

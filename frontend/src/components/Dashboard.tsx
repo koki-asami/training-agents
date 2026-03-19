@@ -6,6 +6,13 @@ import { StatusPanel } from './StatusPanel';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
+const INTERVAL_OPTIONS = [
+  { label: '10秒', value: 10 },
+  { label: '30秒', value: 30 },
+  { label: '60秒', value: 60 },
+  { label: '120秒', value: 120 },
+];
+
 interface Props {
   sessionInfo: SessionInfo;
   participantId: string;
@@ -20,6 +27,8 @@ export function Dashboard({ sessionInfo, participantId }: Props) {
   const [chatMessages, setChatMessages] = useState<SimulationMessage[]>([]);
   const [simTime, setSimTime] = useState('');
   const [started, setStarted] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [eventInterval, setEventInterval] = useState(30);
 
   // Process incoming WebSocket messages
   useEffect(() => {
@@ -32,7 +41,6 @@ export function Dashboard({ sessionInfo, participantId }: Props) {
     } else if (last.type === 'message') {
       setChatMessages((prev) => [...prev, last as SimulationMessage]);
     } else if (last.type === 'system') {
-      // Show system messages in chat
       setChatMessages((prev) => [
         ...prev,
         {
@@ -47,15 +55,45 @@ export function Dashboard({ sessionInfo, participantId }: Props) {
     }
   }, [messages]);
 
-  const handleStart = async () => {
+  const apiCall = async (path: string, method = 'POST') => {
     try {
-      await fetch(`${API_BASE}/api/sessions/${sessionInfo.session_id}/start`, {
-        method: 'POST',
-      });
-      setStarted(true);
+      await fetch(`${API_BASE}/api/sessions/${sessionInfo.session_id}${path}`, { method });
     } catch (e) {
-      console.error('Failed to start session', e);
+      console.error(`API call failed: ${path}`, e);
     }
+  };
+
+  const handleStart = async () => {
+    await apiCall('/start');
+    setStarted(true);
+  };
+
+  const handlePause = async () => {
+    await apiCall('/pause');
+    setPaused(true);
+  };
+
+  const handleResume = async () => {
+    await apiCall('/resume');
+    setPaused(false);
+  };
+
+  const handleIntervalChange = async (seconds: number) => {
+    setEventInterval(seconds);
+    try {
+      await fetch(
+        `${API_BASE}/api/sessions/${sessionInfo.session_id}/interval?seconds=${seconds}`,
+        { method: 'POST' }
+      );
+    } catch (e) {
+      console.error('Failed to set interval', e);
+    }
+  };
+
+  const handleStop = async () => {
+    await apiCall('/stop');
+    setStarted(false);
+    setPaused(false);
   };
 
   return (
@@ -83,11 +121,49 @@ export function Dashboard({ sessionInfo, participantId }: Props) {
           >
             {connected ? '接続中' : '未接続'}
           </span>
+          {paused && (
+            <span
+              style={{
+                fontSize: 11,
+                padding: '2px 8px',
+                borderRadius: 8,
+                background: '#CA8A04',
+              }}
+            >
+              一時停止中
+            </span>
+          )}
         </div>
+
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* Simulation time */}
           {simTime && (
             <span style={{ fontFamily: 'monospace', fontSize: 18 }}>訓練時刻 {simTime}</span>
           )}
+
+          {/* Event interval control */}
+          {started && (
+            <select
+              value={eventInterval}
+              onChange={(e) => handleIntervalChange(Number(e.target.value))}
+              style={{
+                padding: '4px 8px',
+                borderRadius: 4,
+                border: '1px solid #4B5563',
+                background: '#374151',
+                color: 'white',
+                fontSize: 12,
+              }}
+            >
+              {INTERVAL_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  間隔: {opt.label}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Control buttons */}
           {!started ? (
             <button
               onClick={handleStart}
@@ -105,19 +181,53 @@ export function Dashboard({ sessionInfo, participantId }: Props) {
               訓練開始
             </button>
           ) : (
-            <button
-              onClick={() => sendCommand('pause')}
-              style={{
-                padding: '6px 16px',
-                background: '#CA8A04',
-                color: 'white',
-                border: 'none',
-                borderRadius: 4,
-                cursor: 'pointer',
-              }}
-            >
-              一時停止
-            </button>
+            <>
+              {paused ? (
+                <button
+                  onClick={handleResume}
+                  style={{
+                    padding: '6px 16px',
+                    background: '#22C55E',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    fontWeight: 'bold',
+                  }}
+                >
+                  再開
+                </button>
+              ) : (
+                <button
+                  onClick={handlePause}
+                  style={{
+                    padding: '6px 16px',
+                    background: '#CA8A04',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    fontWeight: 'bold',
+                  }}
+                >
+                  一時停止
+                </button>
+              )}
+              <button
+                onClick={handleStop}
+                style={{
+                  padding: '6px 16px',
+                  background: '#6B7280',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  fontSize: 12,
+                }}
+              >
+                終了
+              </button>
+            </>
           )}
         </div>
       </header>

@@ -221,6 +221,7 @@ async def stop_session(session_id: str):
 
 @router.post("/sessions/{session_id}/pause")
 async def pause_session(session_id: str):
+    """Pause the simulation. Available at all difficulty levels."""
     sessions = get_sessions_store()
     runner = sessions.get(session_id)
     if not runner:
@@ -228,7 +229,7 @@ async def pause_session(session_id: str):
 
     if runner.clock.pause():
         return {"status": "paused"}
-    raise HTTPException(status_code=400, detail="Cannot pause (not allowed at this difficulty)")
+    raise HTTPException(status_code=400, detail="Already paused or not running")
 
 
 @router.post("/sessions/{session_id}/resume")
@@ -241,3 +242,18 @@ async def resume_session(session_id: str):
     if runner.clock.resume():
         return {"status": "resumed"}
     raise HTTPException(status_code=400, detail="Not paused")
+
+
+@router.post("/sessions/{session_id}/interval")
+async def set_event_interval(session_id: str, seconds: float):
+    """Change the interval between events (in real seconds)."""
+    sessions = get_sessions_store()
+    runner = sessions.get(session_id)
+    if not runner:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if seconds < 1 or seconds > 300:
+        raise HTTPException(status_code=400, detail="Interval must be between 1 and 300 seconds")
+
+    await runner.set_event_interval(seconds)
+    return {"status": "interval_updated", "seconds": seconds}
