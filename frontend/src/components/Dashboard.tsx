@@ -4,7 +4,7 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import { SimulationChat } from './SimulationChat';
 import { StatusPanel } from './StatusPanel';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8002';
 
 // seconds_per_sim_minute: how many real seconds = 1 minute of scenario time
 const SPEED_OPTIONS = [

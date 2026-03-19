@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ROLE_COLORS, ROLE_DISPLAY_NAMES } from '../types/simulation';
 import type { DisasterStateSummary } from '../types/simulation';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8002';
 
 interface TimelineEvent {
   type: 'event';

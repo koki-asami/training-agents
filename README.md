@@ -77,15 +77,15 @@ OPENAI_MODEL=gpt-4o
 ### 起動
 
 ```bash
-# バックエンド（ターミナル1）ポート8001
-uv run uvicorn src.api.app:app --reload --port 8001
+# バックエンド（ターミナル1）ポート8002
+uv run uvicorn src.api.app:app --reload --port 8002
 
-# フロントエンド（ターミナル2）ポート3001
+# フロントエンド（ターミナル2）ポート3002
 cd frontend
 npm run dev
 ```
 
-ブラウザで http://localhost:3001 を開くとセッション設定画面が表示されます。
+ブラウザで http://localhost:3002 を開くとセッション設定画面が表示されます。
 
 ## 使い方
 
@@ -163,7 +163,7 @@ npm run dev
 | `/api/sessions/{id}/messages` | GET | メッセージ履歴 |
 | `/api/ws/simulation/{id}/{pid}` | WS | リアルタイム通信 |
 
-起動後 http://localhost:8001/docs で Swagger UI から確認できます。
+起動後 http://localhost:8002/docs で Swagger UI から確認できます。
 
 ## プロジェクト構造
 
