@@ -6,7 +6,13 @@ from pathlib import Path
 
 import structlog
 
-from src.models.enums import SOURCE_TO_AGENT, AgentRole, DifficultyLevel
+from src.models.enums import (
+    DEPT_KEYWORDS,
+    SOURCE_TO_AGENT,
+    SOURCE_TO_RESPONSIBLE_DEPT,
+    AgentRole,
+    DifficultyLevel,
+)
 from src.models.scenario import ScenarioConfig, ScenarioEvent, TrainingLevelInfo
 
 logger = structlog.get_logger()
@@ -73,6 +79,27 @@ def _resolve_target_agent(source: str) -> AgentRole:
         if key in source:
             return role
     return AgentRole.GENERAL_AFFAIRS
+
+
+def _resolve_responsible_department(source: str, expected_actions: str) -> str:
+    """Determine the responsible department from source and expected_actions.
+
+    Priority:
+    1. Keywords in expected_actions (most specific)
+    2. Default mapping from information source
+    """
+    # Check expected_actions for department keywords
+    if expected_actions:
+        for keyword, dept in DEPT_KEYWORDS.items():
+            if keyword in expected_actions:
+                return dept
+
+    # Fall back to source-based mapping
+    for key, dept in SOURCE_TO_RESPONSIBLE_DEPT.items():
+        if key in source:
+            return dept
+
+    return "総務部"
 
 
 def _safe_str(value) -> str:
@@ -152,6 +179,9 @@ def _build_event(
         response_window_minutes=int(10 * response_multiplier),
     )
     event.target_agent = _resolve_target_agent(event.source)
+    event.responsible_department = _resolve_responsible_department(
+        event.source, event.expected_actions
+    )
     return event
 
 

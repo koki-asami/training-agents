@@ -29,6 +29,9 @@ class ScenarioEvent(BaseModel):
     weather_info: str = Field(default="", description="気象情報（その時点での気象状況）")
     river_info: str = Field(default="", description="河川情報（その時点での河川状況）")
 
+    # Responsible department (対応部署) - who handles this event
+    responsible_department: str = Field(default="", description="対応部署 (総務部, 消防局, etc.)")
+
     # Derived/runtime fields
     target_agent: AgentRole = AgentRole.GENERAL_AFFAIRS
     response_window_minutes: int = Field(default=10, description="Expected response time window")

@@ -11,6 +11,7 @@ interface TimelineEvent {
   sim_time: string;
   title: string;
   source: string;
+  responsible_department: string;
   target_agent: string;
   target_agent_name: string;
   content_trainee: string;
@@ -341,24 +342,40 @@ export function AdminDashboard({ sessionId }: Props) {
 
 /* ─── Matrix View (Time x Department) ─── */
 
+// Matrix columns: responsible departments (対応部署)
 const DEPT_COLUMNS = [
-  { key: 'soumu', label: '総務部' },
-  { key: 'shoubou', label: '消防局' },
-  { key: 'kensetsu', label: '建設部' },
-  { key: 'fukushi', label: '福祉部' },
-  { key: 'juumin', label: '住民' },
-  { key: 'kishou', label: '気象情報' },
+  { key: '総務部', label: '総務部', color: '#3B82F6' },
+  { key: '消防局', label: '消防局', color: '#EF4444' },
+  { key: '建設部', label: '建設部', color: '#F59E0B' },
+  { key: '福祉部', label: '福祉部', color: '#10B981' },
 ];
 
+// Information source colors (情報源)
 const SOURCE_COLORS: Record<string, string> = {
   '住民': '#0891B2',
   '警察': '#1E40AF',
   '警察(110番)': '#1E40AF',
   '消防': '#EA580C',
+  '消防(119番)': '#EA580C',
   '気象台': '#0284C7',
   '報道': '#6B7280',
   '市町村': '#2563EB',
   '県': '#7C3AED',
+  '自衛隊': '#064E3B',
+};
+
+// Information source icons
+const SOURCE_ICONS: Record<string, string> = {
+  '住民': '🏠',
+  '警察': '🚔',
+  '警察(110番)': '🚔',
+  '消防': '🚒',
+  '消防(119番)': '🚒',
+  '気象台': '🌧',
+  '報道': '📺',
+  '市町村': '🏛',
+  '県': '🏛',
+  '自衛隊': '🪖',
 };
 
 function MatrixView({
@@ -496,7 +513,7 @@ function MatrixView({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '72px repeat(6, 1fr)',
+          gridTemplateColumns: '72px repeat(4, 1fr)',
           position: 'sticky',
           top: 37,
           zIndex: 2,
@@ -511,13 +528,17 @@ function MatrixView({
           <div
             key={col.key}
             style={{
-              padding: '6px',
+              padding: '6px 8px',
               textAlign: 'center',
               borderRight: '1px solid #374151',
-              background: ROLE_COLORS[col.key] ? ROLE_COLORS[col.key] + '30' : undefined,
+              background: col.color + '30',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1,
             }}
           >
-            {col.label}
+            <span>{col.label}</span>
+            <span style={{ fontSize: 9, color: '#9CA3AF', fontWeight: 'normal' }}>対応部署</span>
           </div>
         ))}
       </div>
@@ -566,7 +587,7 @@ function MatrixView({
             ref={isFrontier ? frontierRef : undefined}
             style={{
               display: 'grid',
-              gridTemplateColumns: '72px repeat(6, 1fr)',
+              gridTemplateColumns: '72px repeat(4, 1fr)',
               borderBottom: isFrontier ? '3px solid #3B82F6' : '1px solid #E5E7EB',
               background: isPast ? 'white' : '#F9FAFB',
               opacity: isPast ? 1 : 0.35,
@@ -592,7 +613,7 @@ function MatrixView({
 
             {/* Department cells */}
             {DEPT_COLUMNS.map((col) => {
-              const cellEvents = row.events.filter((e) => e.target_agent === col.key);
+              const cellEvents = row.events.filter((e) => e.responsible_department === col.key);
               return (
                 <div
                   key={col.key}
@@ -608,6 +629,7 @@ function MatrixView({
                   {cellEvents.map((event) => {
                     const isModified = modifiedEventIds.includes(event.event_id);
                     const srcColor = SOURCE_COLORS[event.source] || '#6B7280';
+                    const srcIcon = SOURCE_ICONS[event.source] || '';
 
                     return (
                       <div
@@ -628,11 +650,23 @@ function MatrixView({
                           transition: 'box-shadow 0.15s',
                         }}
                       >
-                        {/* Top row: ID + source badge + score dot */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                        {/* Top row: ID + source badge + score + revision */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginBottom: 2, flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: 'bold', fontSize: 10, color: '#6B7280' }}>#{event.event_id}</span>
-                          <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 4, background: srcColor + '18', color: srcColor }}>
-                            {event.source.replace('(110番)', '').substring(0, 4)}
+                          {/* Information source badge (情報源) */}
+                          <span style={{
+                            fontSize: 9,
+                            padding: '0 4px',
+                            borderRadius: 4,
+                            background: srcColor + '18',
+                            color: srcColor,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 2,
+                            whiteSpace: 'nowrap',
+                          }}>
+                            {srcIcon && <span style={{ fontSize: 10 }}>{srcIcon}</span>}
+                            {event.source.replace('(110番)', '').replace('(119番)', '').substring(0, 4)}
                           </span>
                           {event.score !== null && (
                             <span style={{ fontSize: 10, color: event.score >= 4 ? '#22C55E' : event.score <= 2 ? '#EF4444' : '#F59E0B' }}>
@@ -700,11 +734,26 @@ function EventTooltip({ event, x, y }: { event: TimelineEvent; x: number; y: num
         pointerEvents: 'none',
       }}
     >
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
         <span style={{ fontFamily: 'monospace', color: '#6B7280' }}>#{event.event_id}</span>
         <span style={{ fontFamily: 'monospace', color: '#6B7280' }}>{event.sim_time}</span>
-        <span style={{ fontSize: 10, padding: '1px 4px', borderRadius: 4, background: (SOURCE_COLORS[event.source] || '#666') + '18', color: SOURCE_COLORS[event.source] || '#666' }}>
+        {/* 情報源 */}
+        <span style={{
+          fontSize: 10, padding: '1px 6px', borderRadius: 4,
+          background: (SOURCE_COLORS[event.source] || '#666') + '18',
+          color: SOURCE_COLORS[event.source] || '#666',
+          display: 'inline-flex', alignItems: 'center', gap: 3,
+        }}>
+          {SOURCE_ICONS[event.source] && <span>{SOURCE_ICONS[event.source]}</span>}
           {event.source}
+        </span>
+        <span style={{ color: '#9CA3AF', fontSize: 10 }}>→</span>
+        {/* 対応部署 */}
+        <span style={{
+          fontSize: 10, padding: '1px 6px', borderRadius: 4,
+          background: '#E0F2FE', color: '#0369A1',
+        }}>
+          {event.responsible_department}
         </span>
         <StatusBadge event={event} />
       </div>
@@ -791,13 +840,27 @@ function RevisionPopup({
         <div style={{ padding: '14px 20px', borderBottom: '1px solid #E5E7EB', flexShrink: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#6B7280' }}>#{event.event_id}</span>
                 <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#6B7280' }}>{event.sim_time}</span>
-                <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, background: ROLE_COLORS[event.target_agent] + '20', color: ROLE_COLORS[event.target_agent] || '#666' }}>
-                  {event.target_agent_name}
+                {/* 情報源バッジ */}
+                <span style={{
+                  fontSize: 11, padding: '1px 6px', borderRadius: 4,
+                  background: (SOURCE_COLORS[event.source] || '#666') + '18',
+                  color: SOURCE_COLORS[event.source] || '#666',
+                  display: 'inline-flex', alignItems: 'center', gap: 3,
+                }}>
+                  {SOURCE_ICONS[event.source] && <span>{SOURCE_ICONS[event.source]}</span>}
+                  情報源: {event.source}
                 </span>
-                <span style={{ fontSize: 11, color: '#9CA3AF' }}>情報源: {event.source}</span>
+                <span style={{ color: '#9CA3AF', fontSize: 12 }}>→</span>
+                {/* 対応部署バッジ */}
+                <span style={{
+                  fontSize: 11, padding: '1px 6px', borderRadius: 4,
+                  background: '#DBEAFE', color: '#1E40AF',
+                }}>
+                  対応: {event.responsible_department}
+                </span>
                 <StatusBadge event={event} />
                 {event.is_modified && (
                   <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 6, background: '#EDE9FE', color: '#7C3AED' }}>

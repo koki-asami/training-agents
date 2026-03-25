@@ -83,7 +83,7 @@ class InformationSource(str, Enum):
     SELF_DEFENSE = "自衛隊"
 
 
-# Mapping from information source to target agent
+# Mapping from information source to the agent that *originates* this event
 SOURCE_TO_AGENT: dict[str, AgentRole] = {
     "住民": AgentRole.RESIDENT,
     "警察": AgentRole.GENERAL_AFFAIRS,
@@ -93,4 +93,36 @@ SOURCE_TO_AGENT: dict[str, AgentRole] = {
     "気象台": AgentRole.WEATHER,
     "県": AgentRole.GENERAL_AFFAIRS,
     "自衛隊": AgentRole.GENERAL_AFFAIRS,
+}
+
+# Mapping from information source to *responsible department* (who handles it)
+# 情報源 → 対応部署: 情報を受けて対応する部署
+SOURCE_TO_RESPONSIBLE_DEPT: dict[str, str] = {
+    "住民": "総務部",      # 住民からの通報 → 総務部が受付
+    "警察": "総務部",      # 警察からの連絡 → 総務部が対応
+    "消防": "消防局",      # 消防からの報告 → 消防局が対応
+    "報道": "総務部",      # 報道対応 → 総務部（広報）
+    "市町村": "総務部",    # 他市町村との連絡 → 総務部
+    "気象台": "総務部",    # 気象情報 → 総務部が受信・共有
+    "県": "総務部",        # 県との連絡 → 総務部
+    "自衛隊": "総務部",    # 自衛隊との連絡 → 総務部
+}
+
+# Keywords in expected_actions that indicate department responsibility
+DEPT_KEYWORDS: dict[str, str] = {
+    "消防": "消防局",
+    "救助": "消防局",
+    "救急": "消防局",
+    "建設": "建設部",
+    "道路": "建設部",
+    "土木": "建設部",
+    "河川": "建設部",
+    "排水": "建設部",
+    "福祉": "福祉部",
+    "避難所": "福祉部",
+    "高齢者": "福祉部",
+    "要配慮": "福祉部",
+    "広報": "総務部",
+    "本部": "総務部",
+    "災害対策本部": "総務部",
 }
