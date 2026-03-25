@@ -108,6 +108,14 @@ SOURCE_TO_RESPONSIBLE_DEPT: dict[str, str] = {
     "自衛隊": "総務部",    # 自衛隊との連絡 → 総務部
 }
 
+# Responsible department name -> AgentRole
+DEPT_NAME_TO_ROLE: dict[str, AgentRole] = {
+    "総務部": AgentRole.GENERAL_AFFAIRS,
+    "消防局": AgentRole.FIRE_DEPARTMENT,
+    "建設部": AgentRole.CONSTRUCTION,
+    "福祉部": AgentRole.WELFARE,
+}
+
 # Keywords in expected_actions that indicate department responsibility
 DEPT_KEYWORDS: dict[str, str] = {
     "消防": "消防局",

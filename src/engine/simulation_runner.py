@@ -385,45 +385,104 @@ class SimulationRunner:
                 await self._on_state_change_callback(self.state_manager.get_state_summary())
 
     async def _process_event(self, event: ScenarioEvent):
-        """Process a single scenario event."""
+        """Process a single scenario event.
+
+        Flow:
+        1. Build injection text (LLM-generated or fallback from event data)
+        2. Route to the *responsible department* (not source agent)
+        3. If dept is human → send directly via WebSocket
+        4. If dept is AI → AI processes and reports to Commander
+        """
+        from src.models.enums import DEPT_NAME_TO_ROLE
+
+        # Resolve responsible department role
+        dept_role = DEPT_NAME_TO_ROLE.get(
+            event.responsible_department, event.target_agent
+        )
+
         logger.info(
             "processing_event",
             event_id=event.event_id,
             title=event.title,
-            target=event.target_agent.value,
+            source=event.source,
+            responsible_dept=event.responsible_department,
+            dept_role=dept_role.value,
         )
 
-        # Have Scenario Master generate the injection message
-        injection_text = await self.scenario_master.inject_event(event)
+        # Build injection text: try LLM, fall back to structured text
+        try:
+            injection_text = await self.scenario_master.inject_event(event)
+        except Exception as e:
+            logger.warning("llm_injection_failed", event_id=event.event_id, error=str(e))
+            injection_text = ""
 
-        # Route to appropriate agent or human
-        target_role = event.target_agent
+        if not injection_text or len(injection_text.strip()) < 10:
+            # Fallback: structured message from event data
+            injection_text = self._build_fallback_injection(event)
+
+        # Find assignment for responsible department
         assignment = next(
-            (a for a in self.session.assignments if a.role == target_role),
+            (a for a in self.session.assignments if a.role == dept_role),
             None,
         )
 
+        # Send to all human participants (broadcast approach for training)
+        await self._deliver_event_message(event, injection_text, dept_role, assignment)
+
+    def _build_fallback_injection(self, event: ScenarioEvent) -> str:
+        """Build a structured injection message without LLM."""
+        lines = []
+        lines.append(f"【状況付与 #{event.event_id}】")
+        lines.append(f"情報源: {event.source}")
+        lines.append(f"")
+        if event.content_trainee:
+            lines.append(event.content_trainee)
+        elif event.title:
+            lines.append(event.title)
+        if event.weather_info:
+            lines.append(f"\n[気象情報] {event.weather_info}")
+        if event.river_info:
+            lines.append(f"[河川情報] {event.river_info}")
+        return "\n".join(lines)
+
+    async def _deliver_event_message(
+        self,
+        event: ScenarioEvent,
+        injection_text: str,
+        dept_role: AgentRole,
+        assignment,
+    ):
+        """Deliver an event message to the responsible department."""
         if assignment and assignment.is_human:
             # Send to human participant via WebSocket
             msg = SimulationMessage(
-                sender=AgentRole.SCENARIO_MASTER.value,
+                sender=event.source,
                 receiver=f"human:{assignment.participant_id}",
                 content=injection_text,
                 sim_time=self.clock.current_sim_time,
                 message_type=MessageType.REPORT,
                 related_event_id=event.event_id,
+                metadata={
+                    "source": event.source,
+                    "responsible_department": event.responsible_department,
+                    "event_title": event.title,
+                },
             )
             await self.message_bus.send(msg)
             self.session.messages.append(msg)
 
             if self._on_message_callback:
                 await self._on_message_callback(msg.model_dump())
-        elif target_role.value in self.agents:
+        elif dept_role.value in self.agents:
             # Send to AI agent and get response
-            agent = self.agents[target_role.value]
-            agent_response = await agent.respond(injection_text)
+            agent = self.agents[dept_role.value]
+            try:
+                agent_response = await agent.respond(injection_text)
+            except Exception as e:
+                logger.warning("agent_respond_failed", role=dept_role.value, error=str(e))
+                agent_response = f"（{event.responsible_department}が対応を検討中...）"
 
-            # The AI agent's response goes to the Commander (human or AI)
+            # Report to Commander (human or AI)
             commander_assignment = next(
                 (a for a in self.session.assignments if a.role == AgentRole.COMMANDER),
                 None,
@@ -435,18 +494,42 @@ class SimulationRunner:
                     else AgentRole.COMMANDER.value
                 )
                 report_msg = SimulationMessage(
-                    sender=target_role.value,
+                    sender=dept_role.value,
                     receiver=receiver,
                     content=agent_response,
                     sim_time=self.clock.current_sim_time,
                     message_type=MessageType.REPORT,
                     related_event_id=event.event_id,
+                    metadata={
+                        "source": event.source,
+                        "responsible_department": event.responsible_department,
+                    },
                 )
                 await self.message_bus.send(report_msg)
                 self.session.messages.append(report_msg)
 
                 if self._on_message_callback:
                     await self._on_message_callback(report_msg.model_dump())
+        else:
+            # No assignment found - broadcast to all
+            logger.warning("no_assignment_for_dept", dept=event.responsible_department, role=dept_role.value)
+            msg = SimulationMessage(
+                sender=event.source,
+                receiver="broadcast",
+                content=injection_text,
+                sim_time=self.clock.current_sim_time,
+                message_type=MessageType.REPORT,
+                related_event_id=event.event_id,
+                metadata={
+                    "source": event.source,
+                    "responsible_department": event.responsible_department,
+                },
+            )
+            await self.message_bus.send(msg)
+            self.session.messages.append(msg)
+
+            if self._on_message_callback:
+                await self._on_message_callback(msg.model_dump())
 
         # Track for omission detection
         if self.adaptation_engine:

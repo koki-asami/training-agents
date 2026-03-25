@@ -44,6 +44,8 @@ export interface SimulationMessage {
   sim_time: string;
   message_type: string;
   related_event_id?: string;
+  source?: string;                  // 情報源 (住民, 警察, etc.)
+  responsible_department?: string;   // 対応部署 (総務部, 消防局, etc.)
 }
 
 export interface StateUpdate {

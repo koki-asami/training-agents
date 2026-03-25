@@ -88,13 +88,19 @@ async def websocket_simulation(
         sender = msg_data.get("sender", "")
 
         # Resolve sender display name
+        metadata = msg_data.get("metadata", {})
         sender_name = sender
-        for role in AgentRole:
-            if role.value == sender:
-                names = ROLE_DISPLAY_NAMES.get(role)
-                if names:
-                    sender_name = names[0]  # Japanese name
-                break
+        # Use source name if present in metadata (e.g., "住民", "警察(110番)")
+        source = metadata.get("source", "")
+        if source:
+            sender_name = source
+        else:
+            for role in AgentRole:
+                if role.value == sender:
+                    names = ROLE_DISPLAY_NAMES.get(role)
+                    if names:
+                        sender_name = names[0]  # Japanese name
+                    break
 
         ws_data = {
             "type": "message",
@@ -104,6 +110,8 @@ async def websocket_simulation(
             "sim_time": msg_data.get("sim_time", ""),
             "message_type": msg_data.get("message_type", "report"),
             "related_event_id": msg_data.get("related_event_id"),
+            "source": source,
+            "responsible_department": metadata.get("responsible_department", ""),
         }
 
         if receiver == "broadcast" or receiver == f"human:{participant_id}":

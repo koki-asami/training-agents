@@ -4,6 +4,20 @@ import { ROLE_COLORS, ROLE_DISPLAY_NAMES } from '../types/simulation';
 
 const DEPARTMENT_ROLES: AgentRole[] = ['soumu', 'shoubou', 'kensetsu', 'fukushi'];
 
+// Information source styling
+const SOURCE_STYLE: Record<string, { icon: string; color: string }> = {
+  '住民': { icon: '🏠', color: '#0891B2' },
+  '警察': { icon: '🚔', color: '#1E40AF' },
+  '警察(110番)': { icon: '🚔', color: '#1E40AF' },
+  '消防': { icon: '🚒', color: '#EA580C' },
+  '消防(119番)': { icon: '🚒', color: '#EA580C' },
+  '気象台': { icon: '🌧', color: '#0284C7' },
+  '報道': { icon: '📺', color: '#6B7280' },
+  '市町村': { icon: '🏛', color: '#2563EB' },
+  '県': { icon: '🏛', color: '#7C3AED' },
+  '自衛隊': { icon: '🪖', color: '#064E3B' },
+};
+
 interface Props {
   messages: SimulationMessage[];
   onSendMessage: (content: string, targetRole: string) => void;
@@ -20,8 +34,26 @@ export function SimulationChat({ messages, onSendMessage }: Props) {
 
   const filteredMessages = messages.filter((m) => {
     if (activeChannel === 'all') return true;
-    return m.sender === activeChannel || m.sender_name === activeChannel;
+    // Match by sender role, responsible department, or direct name
+    if (m.sender === activeChannel) return true;
+    // Match by responsible department
+    const deptName = ROLE_DISPLAY_NAMES[activeChannel as AgentRole]?.[0];
+    if (deptName && m.responsible_department === deptName) return true;
+    return false;
   });
+
+  // Count unread per channel (messages since last view)
+  const countByDept: Record<string, number> = {};
+  for (const msg of messages) {
+    if (msg.responsible_department) {
+      const roleKey = Object.entries(ROLE_DISPLAY_NAMES).find(
+        ([, v]) => v[0] === msg.responsible_department
+      )?.[0];
+      if (roleKey) {
+        countByDept[roleKey] = (countByDept[roleKey] || 0) + 1;
+      }
+    }
+  }
 
   const handleSend = () => {
     if (!input.trim()) return;
@@ -51,72 +83,52 @@ export function SimulationChat({ messages, onSendMessage }: Props) {
           overflowX: 'auto',
         }}
       >
-        {channels.map((ch) => (
-          <button
-            key={ch.id}
-            onClick={() => setActiveChannel(ch.id)}
-            style={{
-              padding: '6px 12px',
-              border: 'none',
-              borderBottom: `2px solid ${activeChannel === ch.id ? ch.color : 'transparent'}`,
-              background: 'none',
-              cursor: 'pointer',
-              fontWeight: activeChannel === ch.id ? 'bold' : 'normal',
-              color: activeChannel === ch.id ? ch.color : '#666',
-              fontSize: 13,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {ch.name}
-          </button>
-        ))}
+        {channels.map((ch) => {
+          const count = ch.id === 'all' ? messages.length : (countByDept[ch.id] || 0);
+          return (
+            <button
+              key={ch.id}
+              onClick={() => setActiveChannel(ch.id)}
+              style={{
+                padding: '6px 12px',
+                border: 'none',
+                borderBottom: `2px solid ${activeChannel === ch.id ? ch.color : 'transparent'}`,
+                background: 'none',
+                cursor: 'pointer',
+                fontWeight: activeChannel === ch.id ? 'bold' : 'normal',
+                color: activeChannel === ch.id ? ch.color : '#666',
+                fontSize: 13,
+                whiteSpace: 'nowrap',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+            >
+              {ch.name}
+              {count > 0 && (
+                <span style={{
+                  fontSize: 10, minWidth: 18, textAlign: 'center',
+                  padding: '0 4px', borderRadius: 10,
+                  background: activeChannel === ch.id ? ch.color : '#E5E7EB',
+                  color: activeChannel === ch.id ? 'white' : '#666',
+                }}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Messages */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
-        {filteredMessages.map((msg, i) => (
-          <div key={i} style={{ marginBottom: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
-              <span
-                style={{
-                  fontWeight: 'bold',
-                  color: ROLE_COLORS[msg.sender] || '#333',
-                  fontSize: 13,
-                }}
-              >
-                {msg.sender_name}
-              </span>
-              {msg.sim_time && (
-                <span style={{ fontSize: 11, color: '#999' }}>[{msg.sim_time}]</span>
-              )}
-              {msg.message_type === 'hint' && (
-                <span
-                  style={{
-                    fontSize: 10,
-                    background: '#FEF3C7',
-                    color: '#92400E',
-                    padding: '1px 6px',
-                    borderRadius: 8,
-                  }}
-                >
-                  ヒント
-                </span>
-              )}
-            </div>
-            <div
-              style={{
-                padding: '8px 12px',
-                background: msg.message_type === 'alert' ? '#FEF2F2' : '#F9FAFB',
-                borderRadius: 8,
-                borderLeft: `3px solid ${ROLE_COLORS[msg.sender] || '#ccc'}`,
-                fontSize: 14,
-                lineHeight: 1.5,
-                whiteSpace: 'pre-wrap',
-              }}
-            >
-              {msg.content}
-            </div>
+        {filteredMessages.length === 0 && (
+          <div style={{ textAlign: 'center', color: '#9CA3AF', padding: 40, fontSize: 13 }}>
+            状況付与を待機中...
           </div>
+        )}
+        {filteredMessages.map((msg, i) => (
+          <ChatBubble key={i} msg={msg} />
         ))}
         <div ref={chatEndRef} />
       </div>
@@ -154,6 +166,108 @@ export function SimulationChat({ messages, onSendMessage }: Props) {
         >
           送信
         </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Individual Chat Bubble ─── */
+
+function ChatBubble({ msg }: { msg: SimulationMessage }) {
+  const source = msg.source || '';
+  const srcStyle = SOURCE_STYLE[source];
+  const isInjection = !!msg.related_event_id && !!source;
+  const isSystem = msg.message_type === 'system';
+  const isHint = msg.message_type === 'hint';
+  const isAlert = msg.message_type === 'alert';
+  const senderColor = srcStyle?.color || ROLE_COLORS[msg.sender] || '#374151';
+
+  if (isSystem) {
+    return (
+      <div style={{ textAlign: 'center', margin: '8px 0', fontSize: 12, color: '#9CA3AF' }}>
+        {msg.content}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      {/* Header: source/sender + time + badges */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+        {/* Source icon + name */}
+        {isInjection && srcStyle ? (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 3,
+            fontWeight: 'bold', fontSize: 13, color: senderColor,
+          }}>
+            <span style={{ fontSize: 14 }}>{srcStyle.icon}</span>
+            {source}
+          </span>
+        ) : (
+          <span style={{ fontWeight: 'bold', color: senderColor, fontSize: 13 }}>
+            {msg.sender_name}
+          </span>
+        )}
+
+        {/* Responsible department badge */}
+        {msg.responsible_department && (
+          <>
+            <span style={{ color: '#D1D5DB', fontSize: 11 }}>→</span>
+            <span style={{
+              fontSize: 10, padding: '1px 6px', borderRadius: 4,
+              background: '#DBEAFE', color: '#1E40AF', fontWeight: 500,
+            }}>
+              {msg.responsible_department}
+            </span>
+          </>
+        )}
+
+        {/* Time */}
+        {msg.sim_time && (
+          <span style={{ fontSize: 11, color: '#9CA3AF', fontFamily: 'monospace' }}>
+            {msg.sim_time}
+          </span>
+        )}
+
+        {/* Badges */}
+        {isHint && (
+          <span style={{
+            fontSize: 10, background: '#FEF3C7', color: '#92400E',
+            padding: '1px 6px', borderRadius: 8,
+          }}>
+            ヒント
+          </span>
+        )}
+        {isAlert && (
+          <span style={{
+            fontSize: 10, background: '#FEE2E2', color: '#991B1B',
+            padding: '1px 6px', borderRadius: 8,
+          }}>
+            警報
+          </span>
+        )}
+      </div>
+
+      {/* Message body */}
+      <div
+        style={{
+          padding: '10px 14px',
+          borderRadius: 10,
+          borderLeft: `3px solid ${senderColor}`,
+          fontSize: 14,
+          lineHeight: 1.6,
+          whiteSpace: 'pre-wrap',
+          background: isInjection
+            ? '#FFFBEB' // warm yellow for injected events
+            : isAlert
+              ? '#FEF2F2'
+              : isHint
+                ? '#FFFBEB'
+                : '#F9FAFB',
+          boxShadow: isInjection ? '0 1px 3px rgba(0,0,0,0.06)' : undefined,
+        }}
+      >
+        {msg.content}
       </div>
     </div>
   );
